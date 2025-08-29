@@ -1,307 +1,20 @@
 from __future__ import annotations
 
-from typing import Optional
-
-from loguru import logger
-from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtProperty, QTimer
-from PyQt6.QtGui import QFont, QPalette, QColor, QLinearGradient, QPainter, QBrush
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
-    QApplication,
     QHBoxLayout,
-    QLabel,
-    QFrame,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
-    QTextEdit,
     QVBoxLayout,
-    QWidget,
-    QHeaderView,
-    QGraphicsDropShadowEffect,
+    QWidget, QPushButton, QLabel, QGraphicsBlurEffect, QHeaderView,
 )
-
-from parser import parse_text
-
-
-class AnimatedButton(QPushButton):
-    """Custom button with hover animations and modern styling"""
-    
-    def __init__(self, text: str, primary: bool = False):
-        super().__init__(text)
-        self.primary = primary
-        self.hover_animation = QPropertyAnimation(self, b"geometry")
-        self.hover_animation.setDuration(200)
-        self.hover_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._setup_style()
-        
-    def _setup_style(self):
-        if self.primary:
-            self.setStyleSheet("""
-                AnimatedButton {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #667eea, stop:1 #764ba2);
-                    color: white;
-                    border: none;
-                    border-radius: 12px;
-                    padding: 12px 24px;
-                    font-weight: 600;
-                    font-size: 14px;
-                    min-width: 100px;
-                }
-                AnimatedButton:hover {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #7c9df0, stop:1 #8b5fbf);
-                    transform: translateY(-2px);
-                }
-                AnimatedButton:pressed {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #5a6fd8, stop:1 #6a4190);
-                }
-                AnimatedButton:disabled {
-                    background: #cccccc;
-                    color: #666666;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                AnimatedButton {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #ff6b6b, stop:1 #ee5a52);
-                    color: white;
-                    border: none;
-                    border-radius: 12px;
-                    padding: 12px 24px;
-                    font-weight: 600;
-                    font-size: 14px;
-                    min-width: 100px;
-                }
-                AnimatedButton:hover {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #ff7979, stop:1 #fd6c5d);
-                }
-                AnimatedButton:pressed {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #e55656, stop:1 #d63447);
-                }
-            """)
-
-class PulsingStatusIndicator(QFrame):
-    """Animated status indicator with pulsing effect"""
-    
-    def __init__(self):
-        super().__init__()
-        self.setFixedSize(20, 20)
-        self._setup_style()
-        
-        # Pulsing animation
-        self.pulse_timer = QTimer()
-        self.pulse_timer.timeout.connect(self._pulse)
-        self.pulse_timer.start(1000)
-        self.pulse_state = 0
-        
-    def _setup_style(self):
-        self.setStyleSheet("""
-            PulsingStatusIndicator {
-                background: qradialgradient(cx:0.5, cy:0.5, radius:0.8,
-                    fx:0.3, fy:0.3, stop:0 #4CAF50, stop:1 #2E7D32);
-                border-radius: 10px;
-                border: 3px solid rgba(255, 255, 255, 0.3);
-            }
-        """)
-        
-        # Add glow effect
-        glow = QGraphicsDropShadowEffect()
-        glow.setBlurRadius(15)
-        glow.setColor(QColor(76, 175, 80, 100))
-        glow.setOffset(0, 0)
-        self.setGraphicsEffect(glow)
-        
-    def _pulse(self):
-        self.pulse_state = (self.pulse_state + 1) % 3
-        alpha = [100, 150, 200][self.pulse_state]
-        
-        if hasattr(self, 'current_color'):
-            color = self.current_color
-        else:
-            color = "#4CAF50"
-            
-        glow = QGraphicsDropShadowEffect()
-        glow.setBlurRadius(20)
-        glow.setColor(QColor(color).lighter(120))
-        glow.setOffset(0, 0)
-        self.setGraphicsEffect(glow)
-        
-    def set_status_color(self, color: str, bg_color: str):
-        self.current_color = color
-        self.setStyleSheet(f"""
-            PulsingStatusIndicator {{
-                background: qradialgradient(cx:0.5, cy:0.5, radius:0.8,
-                    fx:0.3, fy:0.3, stop:0 {color}, stop:1 {bg_color});
-                border-radius: 10px;
-                border: 3px solid rgba(255, 255, 255, 0.4);
-            }}
-        """)
-
-class ModernTextEdit(QTextEdit):
-    """Styled text edit with modern appearance"""
-    
-    def __init__(self):
-        super().__init__()
-        self._setup_style()
-        
-    def _setup_style(self):
-        self.setStyleSheet("""
-            ModernTextEdit {
-                background: white;
-                border: 2px solid rgba(108, 117, 125, 0.3);
-                border-radius: 16px;
-                padding: 16px;
-                font-family: 'Segoe UI', system-ui, sans-serif;
-                font-size: 14px;
-                line-height: 1.5;
-                color: #2c3e50;
-                selection-background-color: #667eea;
-                selection-color: white;
-            }
-            ModernTextEdit:focus {
-                border: 2px solid #667eea;
-                background: white;
-            }
-        """)
-        
-        # Add shadow effect
-        shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(20)
-        shadow.setColor(QColor(0, 0, 0, 30))
-        shadow.setOffset(0, 4)
-        self.setGraphicsEffect(shadow)
-
-class ModernTable(QTableWidget):
-    """Beautifully styled table with modern appearance"""
-    
-    def __init__(self, rows: int, columns: int):
-        super().__init__(rows, columns)
-        self._setup_style()
-        
-    def _setup_style(self):
-        self.setStyleSheet("""
-            ModernTable {
-                background: white;
-                gridline-color: rgba(108, 117, 125, 0.2);
-                border: none;
-                border-radius: 16px;
-                font-family: 'Segoe UI', system-ui, sans-serif;
-                font-size: 13px;
-                color: #2c3e50;
-            }
-            ModernTable::item {
-                padding: 12px 16px;
-                border: none;
-                border-bottom: 1px solid rgba(108, 117, 125, 0.1);
-                color: #2c3e50;
-                background: white;
-            }
-            ModernTable::item:selected {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 rgba(102, 126, 234, 0.2),
-                    stop:1 rgba(118, 75, 162, 0.2));
-                color: #2c3e50;
-            }
-            ModernTable::item:alternate {
-                background: #f8f9fa;
-                color: #2c3e50;
-            }
-            QHeaderView::section {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #f8f9fa, stop:1 #e9ecef);
-                color: #495057;
-                padding: 16px;
-                border: none;
-                border-bottom: 2px solid #dee2e6;
-                font-weight: 600;
-                font-size: 13px;
-                text-align: left;
-            }
-            QHeaderView::section:first {
-                border-top-left-radius: 16px;
-            }
-            QHeaderView::section:last {
-                border-top-right-radius: 16px;
-            }
-        """)
-        
-        # Configure header
-        header = self.horizontalHeader()
-        header.setDefaultSectionSize(150)
-        header.setStretchLastSection(True)
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        
-        # Add shadow
-        shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(30)
-        shadow.setColor(QColor(0, 0, 0, 20))
-        shadow.setOffset(0, 8)
-        self.setGraphicsEffect(shadow)
-
-class GlassPanel(QFrame):
-    """Glassmorphism panel effect"""
-    
-    def __init__(self):
-        super().__init__()
-        self._setup_style()
-        
-    def _setup_style(self):
-        self.setStyleSheet("""
-            GlassPanel {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 rgba(255, 255, 255, 0.25),
-                    stop:1 rgba(255, 255, 255, 0.1));
-                border: 1px solid rgba(255, 255, 255, 0.3);
-                border-radius: 20px;
-                backdrop-filter: blur(10px);
-            }
-        """)
-
-class ModernLabel(QLabel):
-    """Styled label with modern typography"""
-    
-    def __init__(self, text: str, style: str = "normal"):
-        super().__init__(text)
-        self._setup_style(style)
-        
-    def _setup_style(self, style: str):
-        if style == "header":
-            self.setStyleSheet("""
-                ModernLabel {
-                    color: #2c3e50;
-                    font-family: 'Segoe UI', system-ui, sans-serif;
-                    font-size: 20px;
-                    font-weight: 700;
-                    margin: 8px 0px;
-                }
-            """)
-        elif style == "subheader":
-            self.setStyleSheet("""
-                ModernLabel {
-                    color: #34495e;
-                    font-family: 'Segoe UI', system-ui, sans-serif;
-                    font-size: 16px;
-                    font-weight: 600;
-                    margin: 6px 0px;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                ModernLabel {
-                    color: #495057;
-                    font-family: 'Segoe UI', system-ui, sans-serif;
-                    font-size: 14px;
-                    font-weight: 500;
-                }
-            """)
+from loguru import logger
+from parser import FishParser
+from .widgets import *
 
 
 class MainWindow(QMainWindow):
@@ -309,9 +22,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.speech_recognizer = speech_recognizer
         self.excel_logger = excel_logger
-        self.setWindowTitle("🎣 Voice2FishLog - Modern Edition")
+        self.setWindowTitle("🎣 Voice2FishLog ")
         self.resize(1100, 700)
-        
+        self.fish_parser = FishParser()
+
+        self._setup_background()
         self._setup_modern_theme()
         self._setup_ui()
         self._connect_signals()
@@ -354,23 +69,67 @@ class MainWindow(QMainWindow):
             }
         """)
 
+    def _setup_background(self) -> None:
+        """Set blurred image background"""
+        self.bg_label = QLabel(self)
+        self.bg_pixmap = QPixmap("assets/bg.jpg")
+
+        # set first time
+        self.bg_label.setPixmap(
+            self.bg_pixmap.scaled(
+                self.size(),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation
+            )
+        )
+        self.bg_label.setGeometry(self.rect())
+        self.bg_label.setScaledContents(True)
+
+        # blur effect
+        blur = QGraphicsBlurEffect()
+        blur.setBlurRadius(75)
+        self.bg_label.setGraphicsEffect(blur)
+
+        # send behind everything
+        self.bg_label.lower()
+
+    def resizeEvent(self, event):
+        """Keep background scaled when window resizes"""
+        super().resizeEvent(event) # Qt calls it automatically
+        if hasattr(self, "bg_label") and hasattr(self, "bg_pixmap"):
+            self.bg_label.setGeometry(self.rect())
+            self.bg_label.setPixmap(
+                self.bg_pixmap.scaled(
+                    self.size(),
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+            )
+
     def _setup_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
+
 
         # Live transcription section with glassmorphism
         transcription_panel = GlassPanel()
         transcription_layout = QVBoxLayout(transcription_panel)
         transcription_layout.setSpacing(12)
         transcription_layout.setContentsMargins(24, 20, 24, 20)
-        
+
         transcription_header = ModernLabel("🎤 Live Transcription", "header")
         transcription_layout.addWidget(transcription_header)
 
         self.live_text = ModernTextEdit()
         self.live_text.setReadOnly(True)
         self.live_text.setPlaceholderText("🎧 Listening for your voice... speak naturally about your catch!")
-        self.live_text.setMinimumHeight(160)
+        self.live_text.setMinimumHeight(50)
+        self.live_text.setMaximumHeight(60)
+        try:
+            self.live_text.setLineWrapMode(self.live_text.LineWrapMode.NoWrap)
+        except Exception:
+            pass
+        self.live_text.setStyleSheet(self.live_text.styleSheet() + "\nModernTextEdit { font-size: 16px;  }\n")
         transcription_layout.addWidget(self.live_text)
 
         # Table section with glassmorphism
@@ -378,18 +137,35 @@ class MainWindow(QMainWindow):
         table_layout = QVBoxLayout(table_panel)
         table_layout.setSpacing(16)
         table_layout.setContentsMargins(24, 20, 24, 20)
-        
-        table_header = ModernLabel("📊 Logged Entries", "header")
-        table_layout.addWidget(table_header)
 
-        self.table = ModernTable(0, 5)
-        self.table.setHorizontalHeaderLabels(["📅 Date", "⏰ Time", "🐟 Species", "📏 Length (cm)", "🎯 Confidence"])
+
+
+        header_row = QHBoxLayout()
+        table_header = ModernLabel("📊 Logged Entries", "header")
+
+        self.boat_input = BoatNameInput()
+
+        header_row.addWidget(table_header)
+        header_row.addStretch(1)
+        header_row.addWidget(self.boat_input)
+        table_layout.addLayout(header_row)
+
+
+        self.table = ModernTable(0, 7)
+        self.table.setHorizontalHeaderLabels(["📅 Date", "⏰ Time","⛵ Boat", "🐟 Species", "📏 Length (cm)", "🎯 Confidence", "🗑"])
         self.table.verticalHeader().setVisible(False)
         self.table.setSortingEnabled(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setAlternatingRowColors(True)
+        # Set a tight width for the trash column and let others expand
+        header = self.table.horizontalHeader()
+        try:
+            header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        except Exception:
+            pass
+        header.resizeSection(6, 44)
         table_layout.addWidget(self.table)
 
         # Control panel with glassmorphism
@@ -401,16 +177,16 @@ class MainWindow(QMainWindow):
         self.btn_start = AnimatedButton("▶️ Start Listening", primary=True)
         self.btn_start.setEnabled(False)
         self.btn_stop = AnimatedButton("⏹️ Stop Listening")
-        
+
         control_layout.addWidget(self.btn_start)
         control_layout.addWidget(self.btn_stop)
-        
+
         # Status indicator
         status_container = QWidget()
         status_layout = QHBoxLayout(status_container)
         status_layout.setContentsMargins(0, 0, 0, 0)
         status_layout.setSpacing(12)
-        
+
         self.status_panel = PulsingStatusIndicator()
         self.status_label = ModernLabel("🟢 Ready to Listen", "subheader")
         self.status_label.setStyleSheet("""
@@ -420,10 +196,10 @@ class MainWindow(QMainWindow):
                 font-size: 15px;
             }
         """)
-        
+
         status_layout.addWidget(self.status_panel)
         status_layout.addWidget(self.status_label)
-        
+
         control_layout.addWidget(status_container)
         control_layout.addStretch(1)
 
@@ -433,9 +209,9 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(transcription_panel)
         splitter.addWidget(table_panel)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
-        splitter.setSizes([250, 450])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([150, 550])
 
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(20, 20, 20, 20)
@@ -483,7 +259,7 @@ class MainWindow(QMainWindow):
         self.live_text.verticalScrollBar().setValue(self.live_text.verticalScrollBar().maximum())
         logger.info(f"[GUI final] conf={confidence:.2f} text={text}")
 
-        result = parse_text(text)
+        result = self.fish_parser.parse_text(text)
         if result.cancel:
             ok = self.excel_logger.cancel_last()
             if ok:
@@ -500,14 +276,16 @@ class MainWindow(QMainWindow):
         if result.species and result.length_cm is not None:
             # Log and update table (newest first)
             try:
-                self.excel_logger.log_entry(result.species, result.length_cm, confidence)
+                boat_name = self.boat_input.get_boat_name()
+                self.boat_input.save_boat_name()
+                self.excel_logger.log_entry(result.species, result.length_cm, confidence, boat_name)
                 logger.info(f"[excel] Logged {result.species} {result.length_cm:.1f} cm conf={confidence:.2f}")
-                self._prepend_table_row(result.species, result.length_cm, confidence)
+                self._prepend_table_row(result.species, result.length_cm, confidence, boat_name)
                 self.statusBar().showMessage("🎣 Great catch logged successfully!", 2000)
             except Exception as e:
                 self._alert(f"Failed to log to Excel: {e}")
 
-    def _prepend_table_row(self, species: str, length_cm: float, confidence: float) -> None:
+    def _prepend_table_row(self, species: str, length_cm: float, confidence: float, boat: str) -> None:
         # Excel has date/time; here we show current
         from datetime import datetime
         now = datetime.now()
@@ -516,13 +294,44 @@ class MainWindow(QMainWindow):
         self.table.insertRow(0)
         self.table.setItem(0, 0, QTableWidgetItem(date_str))
         self.table.setItem(0, 1, QTableWidgetItem(time_str))
-        self.table.setItem(0, 2, QTableWidgetItem(species))
-        self.table.setItem(0, 3, QTableWidgetItem(f"{length_cm:.1f}"))
-        self.table.setItem(0, 4, QTableWidgetItem(f"{confidence:.2f}"))
+        self.table.setItem(0, 2, QTableWidgetItem(boat or "—"))
+        self.table.setItem(0, 3, QTableWidgetItem(species))
+        self.table.setItem(0, 4, QTableWidgetItem(f"{length_cm:.1f}"))
+        self.table.setItem(0, 5, QTableWidgetItem(f"{confidence:.2f}"))
+        self.table.setRowHeight(0, 46)
+
+
+        btn_delete = QPushButton("🗑")
+        btn_delete.setFixedSize(15,30)
+        btn_delete.setStyleSheet("""
+            QPushButton {
+                font-size: 25px; 
+                border: none;
+                background: transparent;
+            }
+            QPushButton:hover {
+                color: red;  /* Make it turn red when hovered */
+                cursor: pointer;
+            }
+        """)
+
+        btn_delete.setFlat(True)
+        btn_delete.clicked.connect(lambda _, row=0: self._remove_table_row(row))
+        self.table.setCellWidget(0, 6, btn_delete)
 
     def _remove_last_table_row(self) -> None:
         if self.table.rowCount() > 0:
             self.table.removeRow(0)
+
+    def _remove_table_row(self, row_index: int) -> None:
+        if 0 <= row_index < self.table.rowCount():
+            reply = QMessageBox.question(
+                self, "Delete Entry",
+                "Are you sure you want to delete this entry?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.table.removeRow(row_index)
 
     def _on_error(self, message: str) -> None:
         self._alert(message)
@@ -536,7 +345,7 @@ class MainWindow(QMainWindow):
         status_config = {
             "listening": {
                 "color": "#2196F3",
-                "bg_color": "#1976D2", 
+                "bg_color": "#1976D2",
                 "label": "🎧 Listening for speech...",
                 "status": "Ready to capture your words"
             },
@@ -547,7 +356,7 @@ class MainWindow(QMainWindow):
                 "status": "Recording your fishing story"
             },
             "finishing": {
-                "color": "#FF9800", 
+                "color": "#FF9800",
                 "bg_color": "#F57C00",
                 "label": "⚡ Processing...",
                 "status": "Analyzing your catch data"
@@ -559,7 +368,7 @@ class MainWindow(QMainWindow):
                 "status": "Voice recognition paused"
             },
         }
-        
+
         config = status_config.get(message, status_config["listening"])
         self.status_panel.set_status_color(config["color"], config["bg_color"])
         self.status_label.setText(config["label"])

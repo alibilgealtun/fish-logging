@@ -3,7 +3,7 @@
 #setup.cfg
 #setup.py
 
-
+.idea/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -271,3 +271,4 @@ __marimo__/
 samples/README.md
 testing_tt.py
 logs.xlsx
+.DS_Store

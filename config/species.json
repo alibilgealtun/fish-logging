@@ -1,0 +1,11 @@
+{
+  "known_species": [
+    "sea bass", "seabass", "cod", "mackerel", "trout", "salmon", "tuna",
+    "snapper", "grouper", "bream", "carp", "pike", "perch", "haddock",
+    "halibut", "flounder", "mullet", "anchovy", "sardine", "herring","sea mouse"
+  ],
+  "normalization": {
+    "seabass": "sea bass",
+    "sea-bass": "sea bass"
+  }
+}

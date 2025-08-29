@@ -5,7 +5,7 @@ import queue
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Optional
 
 import numpy as np
 import sounddevice as sd
@@ -14,6 +14,9 @@ import webrtcvad
 from faster_whisper import WhisperModel
 from loguru import logger
 from PyQt6.QtCore import QThread, pyqtSignal
+import noisereduce as nr
+
+from parser import ParserResult
 
 
 @dataclass
@@ -48,7 +51,7 @@ class SpeechRecognizer(QThread):
     SAMPLE_RATE: int = 16000
     CHANNELS: int = 1
     CHUNK_S: float = 1.0
-    VAD_MODE: int = 3
+    VAD_MODE: int = 1
     MIN_SPEECH_S: float = 0.5
     MAX_SEGMENT_S: float = 4.0
     FISH_PROMPT = (
@@ -58,14 +61,14 @@ class SpeechRecognizer(QThread):
         "If a word sounds like a fish name, bias towards the fish name. "
         "Common fish species include: trout, salmon, bass, sea bass, cod, mackerel, tuna, "
         "sardine, anchovy, snapper, grouper, bream, carp, pike, perch, haddock, halibut, "
-        "flounder, mullet, herring. "
+        "flounder, mullet, herring, sea mouse. "
         "If you hear something like 'throughout' near a number or unit, transcribe it as 'trout'. "
         "Units are typically centimeters (cm) or millimeters (mm), 'cm' is preferred in the transcript. "
         "Examples: 'trout 15 centimeters' -> 'trout 15 cm', 'salmon 23 cm', 'bass 12 cm'."
     )
 
-
-    MODEL_NAME: str = "base.en"
+    # === Model specific configs ===
+    MODEL_NAME: str = "base.en" # specified base/small model for English
     DEVICE: str = "cpu"
     COMPUTE_TYPE: str = "int8"
     # =============================================
@@ -74,6 +77,7 @@ class SpeechRecognizer(QThread):
         """Initialize recognizer state and resources."""
         super().__init__()
         self._stop_flag: bool = False
+        self._paused: bool = False
         self._audio_queue: "queue.Queue[np.ndarray]" = queue.Queue()
         self._stream: Optional[sd.InputStream] = None
         self._model: Optional[WhisperModel] = None
@@ -94,7 +98,8 @@ class SpeechRecognizer(QThread):
         # Unblock any pending queue get
         try:
             self._audio_queue.put_nowait(np.array([], dtype=np.int16))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Error waiting for input stream: {e}")
             pass
 
     def begin(self) -> None:
@@ -117,7 +122,30 @@ class SpeechRecognizer(QThread):
         """Return True if stop has been requested."""
         return self._stop_flag
 
+    def pause(self) -> None:
+        """Pause transcription (after hearing 'WAIT')."""
+        self._paused = True
+        self.status_changed.emit("paused")
+
+    def resume(self) -> None:
+        """Resume transcription (after hearing 'START')."""
+        self._paused = False
+        self.status_changed.emit("listening")
+
     # ---------- Internal helpers ----------
+    def _reduce_noise(self, audio_data: np.ndarray) -> np.ndarray:
+        """Apply noise reduction to audio data."""
+        try:
+            # Convert to float32 for processing
+            audio_float = audio_data.astype(np.float32) / 32767.0
+            # Apply noise reduction
+            reduced = nr.reduce_noise(y=audio_float, sr=self.SAMPLE_RATE, stationary=False)
+            # Convert back to int16
+            return (reduced * 32767).astype(np.int16)
+        except Exception as e:
+            logger.debug(f"Noise reduction failed: {e}")
+            return audio_data
+
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:  # type: ignore[override]
         """Sounddevice callback: push mono PCM16 frames into the queue."""
         if status:
@@ -128,7 +156,7 @@ class SpeechRecognizer(QThread):
         except Exception as e:
             logger.debug(f"Audio callback error: {e}")
 
-    def _vad_collector(self, vad: webrtcvad.Vad, sample_rate: int, padding_ms: int = 400):
+    def _vad_collector(self, vad: webrtcvad.Vad, sample_rate: int, padding_ms: int = 800):
         """Yield voiced segments using webrtcvad with a small hangover padding.
 
         Parameters
@@ -197,7 +225,7 @@ class SpeechRecognizer(QThread):
 
     # ---------- Thread main ----------
     def run(self) -> None:  # type: ignore[override]
-        """Run the realtime STT loop using testing_tt.py's configuration."""
+        """Run the realtime STT loop."""
         try:
             logger.info("Loading model... (first run will download it)")
             self._model = WhisperModel(self.MODEL_NAME, device=self.DEVICE, compute_type=self.COMPUTE_TYPE)
@@ -244,6 +272,8 @@ class SpeechRecognizer(QThread):
                 if (segment.size / self.SAMPLE_RATE) < self.MIN_SPEECH_S:
                     continue
 
+                segment = self._reduce_noise(segment)
+
                 wav_path = self._write_wav_bytes(segment, self.SAMPLE_RATE)
 
                 try:
@@ -267,35 +297,53 @@ class SpeechRecognizer(QThread):
 
 
                 text_out = "".join(seg.text + " " for seg in segments).strip()
-                if text_out:
-                    logger.info(f"Raw transcription: {text_out}")  # Debug log
-                    
-                    # Apply ASR corrections before parsing
-                    try:
-                        from parser import parse_text, apply_fish_asr_corrections 
-                        
-                        # First apply fish-specific ASR corrections
-                        corrected_text = apply_fish_asr_corrections(text_out)
-                        if corrected_text != text_out.lower():
-                            logger.info(f"After ASR corrections: {corrected_text}")
-                        
-                        result = parse_text(corrected_text)
-                        if result.species and result.length_cm is not None:
-                            # Normalize numeric formatting: keep one decimal if needed
-                            raw_val = float(result.length_cm)
-                            num_str = (f"{raw_val:.1f}").rstrip("0").rstrip(".")
-                            formatted = f"{result.species} {num_str} cm"
-                            logger.info(f">> {formatted}")
-                            self.final_text.emit(formatted, 0.85)
-                        else:
-                            # Fallback to corrected text if parsing incomplete
-                            logger.info(f">> {corrected_text} (partial parse)")
-                            self.final_text.emit(corrected_text, 0.85)
-                    except Exception as e:
-                        logger.error(f"Parser error: {e}")
-                        # Fallback to raw text
-                        logger.info(f">> {text_out}")
-                        self.final_text.emit(text_out, 0.85)
+                if not text_out:
+                    continue
+
+                logger.info(f"Raw transcription: {text_out}")  # Debug log
+
+                # --- Check for pause/resume commands ---
+                if "wait" in text_out.lower():
+                    self.pause()
+                    self.final_text.emit("Waiting until 'start' is said.", 0.85)
+                    continue
+                elif "start" in text_out.lower():
+                    self.resume()
+                    continue
+
+                # If paused, skip processing
+                if self._paused:
+                    logger.debug("Paused: ignoring transcription")
+                    continue
+
+                # Apply ASR corrections before parsing
+                try:
+                    from parser import FishParser, TextNormalizer
+                    fish_parser = FishParser()
+                    text_normalizer = TextNormalizer()
+
+                    # First apply fish-specific ASR corrections
+                    corrected_text = text_normalizer.apply_fish_asr_corrections(text_out)
+                    if corrected_text != text_out.lower():
+                        logger.info(f"After ASR corrections: {corrected_text}")
+
+                    result: ParserResult = fish_parser.parse_text(corrected_text)
+                    if result.species and result.length_cm is not None:
+                        # Normalize numeric formatting: keep one decimal if needed
+                        raw_val = float(result.length_cm)
+                        num_str = (f"{raw_val:.1f}").rstrip("0").rstrip(".")
+                        formatted = f"{result.species} {num_str} cm"
+                        logger.info(f">> {formatted}")
+                        self.final_text.emit(formatted, 0.85)
+                    else:
+                        # Fallback to corrected text if parsing incomplete
+                        logger.info(f">> {corrected_text} (partial parse)")
+                        self.final_text.emit(corrected_text, 0.85)
+                except Exception as e:
+                    logger.error(f"Parser error: {e}")
+                    # Fallback to raw text
+                    logger.info(f">> {text_out}")
+                    self.final_text.emit(text_out, 0.85)
 
                 try:
                     os.remove(wav_path)
@@ -315,4 +363,4 @@ class SpeechRecognizer(QThread):
             try:
                 self.status_changed.emit(message)
             except Exception:
-                pass
+                logger.error(f"Failed to emit status_changed message: {message}")

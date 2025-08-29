@@ -1,0 +1,17 @@
+{
+  "species": {
+    "\\bthru\\s*out\\b": "trout",
+    "\\btrue\\s*out\\b": "trout",
+    "\\bthroughout\\b": "trout",
+    "\\bsea\\s+bus\\b": "sea bass",
+    "\\bseabass\\b": "sea bass"
+  },
+  "units": {
+    "\\bpre-centimeters\\b": "three centimeters",
+    "\\btree\\s*centimeters\\b": "three centimeters",
+    "\\bfree-centimeters\\b": "three centimeters",
+    "\\bsee\\s*em\\b": "cm",
+    "\\bseeem\\b": "cm",
+    "\\bcem\\b": "cm"
+  }
+}

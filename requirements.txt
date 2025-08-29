@@ -30,3 +30,6 @@ pytest>=7.4
 
 # Optional: improve Windows TLS/SSL issues when downloading models
 certifi>=2023.7.22
+
+webrtcvad-wheels~=2.0.14
+pandas~=2.3.2

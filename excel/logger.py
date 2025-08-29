@@ -10,27 +10,28 @@ from openpyxl import Workbook, load_workbook
 
 class ExcelLogger:
     def __init__(self, file_path: Optional[str] = None) -> None:
-        self.file_path = Path(file_path) if file_path else Path("logs.xlsx")
+        self.file_path = Path(file_path) if file_path else Path("../logs.xlsx").absolute()
         self.lock = Lock()
         self._ensure_workbook()
 
     def _ensure_workbook(self) -> None:
         with self.lock:
             if not self.file_path.exists():
+                self.file_path.parent.mkdir(parents=True, exist_ok=True)
                 wb = Workbook()
                 ws = wb.active
                 ws.title = "Logs"
-                ws.append(["Date", "Time", "Species", "Length (cm)", "Confidence"])
+                ws.append(["Date", "Time",  "Boat", "Species", "Length (cm)", "Confidence"])
                 wb.save(self.file_path)
 
-    def log_entry(self, species: str, length_cm: float, confidence: float) -> None:
+    def log_entry(self, species: str, length_cm: float, confidence: float, boat: str = "") -> None:
         now = datetime.now()
         date_str = now.strftime("%Y-%m-%d")
         time_str = now.strftime("%H:%M:%S")
         with self.lock:
             wb = load_workbook(self.file_path)
             ws = wb.active
-            ws.append([date_str, time_str, species, float(length_cm), float(confidence)])
+            ws.append([date_str, time_str, boat, species, float(length_cm), float(confidence)])
             wb.save(self.file_path)
 
     def cancel_last(self) -> bool:

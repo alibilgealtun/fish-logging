@@ -4,13 +4,12 @@ import sys
 from loguru import logger
 from PyQt6.QtWidgets import QApplication
 
-from gui import MainWindow
-from logger import ExcelLogger
+from gui.MainWindow import MainWindow
+from excel.logger import ExcelLogger
 from speech import SpeechRecognizer
 
 
 def main() -> None:
-    # Ensure a single stderr sink to avoid duplicate logs
     try:
         logger.remove()
     except Exception:
@@ -18,7 +17,6 @@ def main() -> None:
     logger.add(sys.stderr, level="INFO")
     app = QApplication(sys.argv)
 
-    # Use the testing_tt.py configuration (base.en CPU int8, VAD) via SpeechRecognizer
     speech = SpeechRecognizer()
     xlogger = ExcelLogger()
 
