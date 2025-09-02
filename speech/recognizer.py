@@ -46,6 +46,7 @@ class SpeechRecognizer(QThread):
     final_text = pyqtSignal(str, float)
     error = pyqtSignal(str)
     status_changed = pyqtSignal(str)
+    specie_detected = pyqtSignal(str)
 
     # ===== CONFIG  =====
     SAMPLE_RATE: int = 16000
@@ -55,20 +56,17 @@ class SpeechRecognizer(QThread):
     MIN_SPEECH_S: float = 0.5
     MAX_SEGMENT_S: float = 4.0
     FISH_PROMPT = (
-        "This is a continuous conversation about fish species and their measurements. "
-        "The user typically speaks in the format '<fish species> <number> <unit>'. "
+        "This is a continuous conversation about fish species and numbers (their measurements). "
+        "The user typically speaks fish specie or number"
         "Always prioritize fish species vocabulary over similar-sounding common words. "
         "If a word sounds like a fish name, bias towards the fish name. "
-        "Common fish species include: trout, salmon, bass, sea bass, cod, mackerel, tuna, "
-        "sardine, anchovy, snapper, grouper, bream, carp, pike, perch, haddock, halibut, "
-        "flounder, mullet, herring, sea mouse. "
-        "If you hear something like 'throughout' near a number or unit, transcribe it as 'trout'. "
+        "Common fish species include: trout, salmon, sea bass,  tuna. "
         "Units are typically centimeters (cm) or millimeters (mm), 'cm' is preferred in the transcript. "
-        "Examples: 'trout 15 centimeters' -> 'trout 15 cm', 'salmon 23 cm', 'bass 12 cm'."
+        "You might also hear 'cancel', 'wait' and 'start'."
     )
 
     # === Model specific configs ===
-    MODEL_NAME: str = "base.en" # specified base/small model for English
+    MODEL_NAME: str = "base.en" # specified base model for English
     DEVICE: str = "cpu"
     COMPUTE_TYPE: str = "int8"
     # =============================================
@@ -83,6 +81,7 @@ class SpeechRecognizer(QThread):
         self._model: Optional[WhisperModel] = None
         self._chunk_frames: int = int(self.SAMPLE_RATE * self.CHUNK_S)
         self._last_status_msg: Optional[str] = None
+        self._last_fish_specie = None
 
     # ---------- Public control ----------
     def stop(self) -> None:
@@ -328,11 +327,15 @@ class SpeechRecognizer(QThread):
                         logger.info(f"After ASR corrections: {corrected_text}")
 
                     result: ParserResult = fish_parser.parse_text(corrected_text)
-                    if result.species and result.length_cm is not None:
+                    if result.species is not None:
+                        self._last_fish_specie = result.species
+                        self.specie_detected.emit(result.species)
+
+                    if result.length_cm is not None:
                         # Normalize numeric formatting: keep one decimal if needed
                         raw_val = float(result.length_cm)
                         num_str = (f"{raw_val:.1f}").rstrip("0").rstrip(".")
-                        formatted = f"{result.species} {num_str} cm"
+                        formatted = f"{self._last_fish_specie} {num_str} cm"
                         logger.info(f">> {formatted}")
                         self.final_text.emit(formatted, 0.85)
                     else:
