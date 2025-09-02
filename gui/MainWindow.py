@@ -44,10 +44,6 @@ class MainWindow(QMainWindow):
     def _setup_modern_theme(self) -> None:
         """Apply modern dark/light theme to the entire application"""
         self.setStyleSheet("""
-            QMainWindow {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #667eea, stop:0.5 #764ba2, stop:1 #667eea);
-            }
             QSplitter::handle {
                 background: rgba(255, 255, 255, 0.3);
                 border-radius: 3px;
@@ -145,7 +141,28 @@ class MainWindow(QMainWindow):
 
         self.boat_input = BoatNameInput()
 
+        self.current_specie_label = ModernLabel("🐟 Current:", style="subheader")
+
+        self.current_specie_value = ModernLabel("—", style="subheader")
+        self.current_specie_value.setStyleSheet("""
+            QLabel {
+                color: #FFD700;        
+                font-weight: 700;
+                font-size: 18px;
+                padding-left: 0px;
+                margin-left: 0px;
+            }
+        """)
+
         header_row.addWidget(table_header)
+
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(6)
+        header_row.addWidget(self.current_specie_label)
+        header_row.addWidget(self.current_specie_value)
+        header_row.addStretch()
+
+
         header_row.addStretch(1)
         header_row.addWidget(self.boat_input)
         table_layout.addLayout(header_row)
@@ -163,8 +180,8 @@ class MainWindow(QMainWindow):
         header = self.table.horizontalHeader()
         try:
             header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(str(e))
         header.resizeSection(6, 44)
         table_layout.addWidget(self.table)
 
@@ -237,6 +254,7 @@ class MainWindow(QMainWindow):
             self.speech_recognizer.error.disconnect(self._on_error)
         except Exception:
             pass
+
         self.speech_recognizer.partial_text.connect(self._on_partial_text)
         self.speech_recognizer.final_text.connect(self._on_final_text)
         self.speech_recognizer.error.connect(self._on_error)
@@ -247,6 +265,16 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             self.speech_recognizer.status_changed.connect(self._on_status)
+
+        if hasattr(self.speech_recognizer, "specie_detected"):
+            try:
+                self.speech_recognizer.specie_detected.disconnect(self._on_specie_detected)
+            except Exception:
+                pass
+            self.speech_recognizer.specie_detected.connect(self._on_specie_detected)
+
+    def _on_specie_detected(self, specie: str) -> None:
+        self.current_specie_value.setText(specie)
 
     def _on_partial_text(self, text: str) -> None:
         # Show last partial text in live panel and log to console
@@ -276,6 +304,7 @@ class MainWindow(QMainWindow):
         if result.species and result.length_cm is not None:
             # Log and update table (newest first)
             try:
+                self.current_specie_value.setText(result.species)
                 boat_name = self.boat_input.get_boat_name()
                 self.boat_input.save_boat_name()
                 self.excel_logger.log_entry(result.species, result.length_cm, confidence, boat_name)
@@ -311,7 +340,6 @@ class MainWindow(QMainWindow):
             }
             QPushButton:hover {
                 color: red;  /* Make it turn red when hovered */
-                cursor: pointer;
             }
         """)
 

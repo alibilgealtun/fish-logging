@@ -78,8 +78,8 @@ class ModernTable(QTableWidget):
                 header.setSectionResizeMode(column_count - 1, QHeaderView.ResizeMode.Fixed)
                 # Give a compact width for the last column (trash icon)
                 header.resizeSection(column_count - 1, 44)
-        except Exception:
-            pass
+        except Exception as e:
+            pass # TODO log this
 
         # Add shadow
         shadow = QGraphicsDropShadowEffect()

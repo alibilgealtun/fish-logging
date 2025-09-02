@@ -21,7 +21,7 @@ class ModernTextEdit(QTextEdit):
                 border: 2px solid rgba(108, 117, 125, 0.3);
                 border-radius: 16px;
                 padding: 16px;
-                font-family: 'Segoe UI', system-ui, sans-serif;
+                font-family: sans-serif;
                 font-size: 14px;
                 line-height: 1.5;
                 color: #2c3e50;
