@@ -42,6 +42,7 @@ class NumberParser:
         decimal_str = ""
         in_decimal_part = False
         is_digit_sequence = True
+        last_decimal_was_tens = False
 
         for i, token in enumerate(normalized_tokens):
             # Map misheard words to their correct counterparts
@@ -65,10 +66,26 @@ class NumberParser:
             value = self.config.number_words[token]
 
             if in_decimal_part:
+                # Handle decimal part with special care for "tens + ones" (e.g., "ninety five" => 95)
                 if value >= 10:
-                    for digit in str(value): decimal_str += digit
+                    # If this is an exact tens value (20,30,...,90), append two digits and mark
+                    if value % 10 == 0 and 20 <= value <= 90:
+                        for digit in str(value):
+                            decimal_str += digit
+                        last_decimal_was_tens = True
+                    else:
+                        # values like 11, 12, ... append as-is
+                        for digit in str(value):
+                            decimal_str += digit
+                        last_decimal_was_tens = False
                 else:
-                    decimal_str += str(value)
+                    if last_decimal_was_tens and decimal_str:
+                        # Replace trailing zero from the tens with this ones digit
+                        # Example: '90' + '5' => replace '0' -> '95'
+                        decimal_str = decimal_str[:-1] + str(value)
+                        last_decimal_was_tens = False
+                    else:
+                        decimal_str += str(value)
             else:
                 if value >= 10: is_digit_sequence = False
 
