@@ -11,8 +11,9 @@ import sounddevice as sd
 import soundfile as sf
 from faster_whisper import WhisperModel
 from loguru import logger
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 
+from . import BaseSpeechRecognizer
 from .noise_controller import NoiseController
 from parser import ParserResult
 
@@ -33,7 +34,7 @@ class TranscriptionSegment:
     confidence: float
 
 
-class SpeechRecognizer(QThread):
+class WhisperRecognizer(BaseSpeechRecognizer):
     """
     Realtime CPU-only speech recognizer using NoiseController + faster-whisper.
     Optimized for high-noise environments with engine sounds and background speech.
