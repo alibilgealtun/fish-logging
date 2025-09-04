@@ -315,6 +315,18 @@ class TestNoiseAndContext:
             value, unit = parser.extract_number_with_units(text)
             assert value == expected, f"Failed for '{text}': got {value}, expected {expected}"
 
+    def test_decimal_floor_and_round(self):
+        parser = NumberParser(DummyConfig())
+        test_cases = [
+            ("thirty five and nine five centimeters", 35.95),
+            ("thirty five and ninety five centimeters", 35.95),
+            ("thirty five and ninety centimeters", 35.9),
+            ("three point three five centimeters", 3.35),
+            ("three point twenty five centimeters", 3.25)
+        ]
+        for text, expected in test_cases:
+            value, unit = parser.extract_number_with_units(text)
+            assert value == expected, f"Failed for '{text}': got {value}, expected {expected}"
 
 # Original test to ensure compatibility
 def test_sea_bass_measurement():
@@ -323,6 +335,7 @@ def test_sea_bass_measurement():
     value, unit = parser.extract_number_with_units(text)
     assert value == 35.5
     assert unit == "cm"
+
 
 
 if __name__ == "__main__":
