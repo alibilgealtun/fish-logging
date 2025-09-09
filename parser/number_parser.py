@@ -4,7 +4,6 @@ import re
 from typing import Optional, Tuple, List
 from rapidfuzz import process, fuzz
 
-# Assuming config and text_utils are in the same directory or installed package
 from .config import ConfigManager
 from .text_utils import tokenize_text
 
@@ -148,6 +147,7 @@ class NumberParser:
         best_match = process.extractOne(unit_lower, unit_candidates, scorer=fuzz.ratio)
         return self.config.unit_synonyms.get(best_match[0], "cm") if best_match and best_match[1] >= 80 else "cm"
 
+
     def extract_number_with_units(self, text: str) -> Tuple[Optional[float], Optional[str]]:
         """Extract numeric measurement and convert to standard units."""
         if not text:
@@ -165,7 +165,7 @@ class NumberParser:
         if match:
             return finalize(float(match.group(1).replace(",", ".")), match.group(2))
 
-        # FIX: Re-add Ordinal number strategy (e.g., "35th")
+        # Strategy 2: Ordinal number strategy (e.g., "35th")
         ordinal_match = self._ordinal_pattern.search(text_lower)
         if ordinal_match:
             number = float(ordinal_match.group(1))
@@ -173,24 +173,33 @@ class NumberParser:
             unit = unit_match.group(1) if unit_match else "cm"
             return finalize(number, unit)
 
-        # Spoken Number Strategy
+        # Strategy 3: Spoken Number Strategy
         tokens = tokenize_text(text_lower)
         unit_indices = [i for i, token in enumerate(tokens) if self._fuzzy_find_unit_index([token]) is not None]
 
         if unit_indices:
             last_unit_index = unit_indices[-1]
             unit_token = tokens[last_unit_index]
-            # FIX: Increase search window to 10 to catch longer numbers
             start_index = max(0, last_unit_index - 10)
             search_tokens = tokens[start_index:last_unit_index]
             parsed_number = self._find_longest_spoken_number(search_tokens)
             if parsed_number is not None:
                 return finalize(parsed_number, unit_token)
 
+        # Check for spoken number without explicit unit
         parsed_number = self._find_longest_spoken_number(tokens)
         if parsed_number is not None:
             unit_match = re.search(r"\b(cm|centimeters?|mm|millimeters?)\b", text_lower, re.IGNORECASE)
             unit = unit_match.group(1) if unit_match else "cm"
             return finalize(parsed_number, unit)
 
+        # Strategy 4 (Fallback): Simple numeric regex for standalone numbers (e.g., "5")
+        # This handles cases where only a number is spoken without any unit.
+        numeric_match = self._numeric_pattern.search(text_lower)
+        if numeric_match:
+            number = float(numeric_match.group(1).replace(",", "."))
+            # Assume the default unit 'cm' as it's the most common case
+            return finalize(number, "cm")
+
+        # If all strategies fail, return None
         return None, None

@@ -58,14 +58,19 @@ class FishParser:
         if self._cancel_pattern.search(text_norm):
             return ParserResult(cancel=True, species=None, length_cm=None)
 
-        # Apply ASR corrections
-        normalized_text = self.text_normalizer.apply_fish_asr_corrections(text_norm)
-
         # Extract measurements
-        length_val, unit = self.number_parser.extract_number_with_units(normalized_text)
+        length_val, unit = self.number_parser.extract_number_with_units(text_norm)
+
+        # If a number was found but no unit was specified, assume the default unit 'cm'.
+        if length_val is not None and unit is None:
+            unit = "cm"
+
+        # Finalize the length in cm if the unit is correct
+        if length_val is not None and unit == "cm":
+            length_cm = float(length_val)
 
         # Extract species
-        species = self.species_matcher.fuzzy_match_species(normalized_text)
+        species = self.species_matcher.fuzzy_match_species(text_norm)
         if species:
             species = species.title()
 
@@ -74,5 +79,4 @@ class FishParser:
             return ParserResult(cancel=False, species=species, length_cm=float(length_val))
 
         return ParserResult(cancel=False, species=species, length_cm=length_val)
-
 
