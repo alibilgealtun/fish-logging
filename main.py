@@ -5,7 +5,7 @@ import os
 from PyQt6.QtWidgets import QApplication
 
 from gui.MainWindow import MainWindow
-from excel.logger import ExcelLogger
+from logger.excel_logger  import ExcelLogger
 from loguru import logger
 from speech import BaseSpeechRecognizer, WhisperRecognizer, VoskRecognizer
 
