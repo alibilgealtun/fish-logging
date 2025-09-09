@@ -66,14 +66,9 @@ class TextNormalizer:
 
         corrected_text = text.strip().lower()
 
-        # Check if utterance contains numeric/unit context
-        has_numeric_context = bool(self._numeric_unit_pattern.search(corrected_text))
-
-        # Apply species corrections only with numeric context
-        if has_numeric_context:
-            species_corrections = self.config.species_corrections
-            for pattern, replacement in species_corrections.items():
-                corrected_text = re.sub(pattern, replacement, corrected_text, flags=re.IGNORECASE)
+        species_corrections = self.config.species_corrections
+        for pattern, replacement in species_corrections.items():
+            corrected_text = re.sub(pattern, replacement, corrected_text, flags=re.IGNORECASE)
 
         # Apply unit/number corrections
         corrected_text = self._apply_unit_and_number_corrections(corrected_text)
