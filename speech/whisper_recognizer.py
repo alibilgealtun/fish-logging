@@ -13,7 +13,7 @@ from faster_whisper import WhisperModel
 from loguru import logger
 from PyQt6.QtCore import pyqtSignal
 
-from . import BaseSpeechRecognizer
+from .base_recognizer import BaseSpeechRecognizer
 from .noise_controller import NoiseController
 from parser import ParserResult
 
@@ -50,13 +50,13 @@ class WhisperRecognizer(BaseSpeechRecognizer):
     # ===== CONFIG  =====
     SAMPLE_RATE: int = 16000
     CHANNELS: int = 1
-    CHUNK_S: float = 0.5  # Reduced for better responsiveness
+    CHUNK_S: float = 0.5
 
     # Noise controller settings - optimized for engine noise + background speech
-    VAD_MODE: int = 2  # More aggressive VAD for noisy environments
-    MIN_SPEECH_S: float = 0.4  # Slightly shorter minimum
-    MAX_SEGMENT_S: float = 3.0  # Shorter segments for faster processing
-    PADDING_MS: int = 600  # Reduced padding for faster response
+    VAD_MODE: int = 2 # More aggressive VAD for noisy environments
+    MIN_SPEECH_S: float = 0.4
+    MAX_SEGMENT_S: float = 3.0
+    PADDING_MS: int = 600
 
     FISH_PROMPT = (
         "This is a continuous conversation about fish species and numbers (their measurements). "
@@ -69,9 +69,22 @@ class WhisperRecognizer(BaseSpeechRecognizer):
     )
 
     # === Model specific configs ===
-    MODEL_NAME: str = "base.en"  # Fast model for real-time
+    MODEL_NAME: str = "base.en"
     DEVICE: str = "cpu"
-    COMPUTE_TYPE: str = "int8"  # Fastest compute type
+    COMPUTE_TYPE: str = "int8"
+
+    # === Decoding parameters ===
+    BEAM_SIZE: int = 3
+    BEST_OF: int = 5
+    TEMPERATURE: float = 0.0
+    PATIENCE: float = 1.0
+    LENGTH_PENALTY: float = 1.0
+    REPETITION_PENALTY: float = 1.0
+    WITHOUT_TIMESTAMPS: bool = True
+    CONDITION_ON_PREVIOUS_TEXT: bool = True
+    VAD_FILTER: bool = False
+    VAD_PARAMETERS: Optional[dict] = None
+    WORD_TIMESTAMPS: bool = False
 
     def __init__(self) -> None:
         """Initialize recognizer state and resources."""
@@ -121,6 +134,12 @@ class WhisperRecognizer(BaseSpeechRecognizer):
             max_segment_s=self.MAX_SEGMENT_S
         )
 
+        from logger.session_logger import SessionLogger
+        self._session_logger = SessionLogger(log_dir="logs")
+        self._session_logger.log_start(self.get_config())
+        import loguru
+        self._session_log_sink_id = loguru.logger.add(self._session_logger.log_path, format="[{time:YYYY-MM-DD HH:mm:ss}] {level}: {message}", level="INFO")
+
         if not self.isRunning():
             try:
                 self.start()
@@ -140,6 +159,33 @@ class WhisperRecognizer(BaseSpeechRecognizer):
         """Resume transcription (after hearing 'START')."""
         self._paused = False
         self.status_changed.emit("listening")
+
+    def get_config(self) -> dict:
+        """Return all relevant config parameters for logging/export."""
+        return {
+            "SAMPLE_RATE": self.SAMPLE_RATE,
+            "CHANNELS": self.CHANNELS,
+            "CHUNK_S": self.CHUNK_S,
+            "VAD_MODE": self.VAD_MODE,
+            "MIN_SPEECH_S": self.MIN_SPEECH_S,
+            "MAX_SEGMENT_S": self.MAX_SEGMENT_S,
+            "PADDING_MS": self.PADDING_MS,
+            "FISH_PROMPT": self.FISH_PROMPT,
+            "MODEL_NAME": self.MODEL_NAME,
+            "DEVICE": self.DEVICE,
+            "COMPUTE_TYPE": self.COMPUTE_TYPE,
+            "BEAM_SIZE": self.BEAM_SIZE,
+            "BEST_OF": self.BEST_OF,
+            "TEMPERATURE": self.TEMPERATURE,
+            "PATIENCE": self.PATIENCE,
+            "LENGTH_PENALTY": self.LENGTH_PENALTY,
+            "REPETITION_PENALTY": self.REPETITION_PENALTY,
+            "WITHOUT_TIMESTAMPS": self.WITHOUT_TIMESTAMPS,
+            "CONDITION_ON_PREVIOUS_TEXT": self.CONDITION_ON_PREVIOUS_TEXT,
+            "VAD_FILTER": self.VAD_FILTER,
+            "VAD_PARAMETERS": self.VAD_PARAMETERS,
+            "WORD_TIMESTAMPS": self.WORD_TIMESTAMPS
+        }
 
     # ---------- Internal helpers ----------
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
@@ -187,6 +233,8 @@ class WhisperRecognizer(BaseSpeechRecognizer):
             msg = f"Failed to load Whisper model: {e}"
             logger.error(msg)
             self.error.emit(msg)
+            if hasattr(self, '_session_logger'):
+                self._session_logger.log(f"ERROR: {e}")
             return
 
         try:
@@ -238,13 +286,18 @@ class WhisperRecognizer(BaseSpeechRecognizer):
                         # Transcribe with optimized settings for speed
                         segments, info = self._model.transcribe(
                             wav_path,
-                            beam_size=3,  # Reduced beam size for speed
+                            beam_size=self.BEAM_SIZE,
+                            best_of=self.BEST_OF,
+                            temperature=self.TEMPERATURE,
+                            patience=self.PATIENCE,
+                            length_penalty=self.LENGTH_PENALTY,
+                            repetition_penalty=self.REPETITION_PENALTY,
                             language="en",
-                            condition_on_previous_text=False,  # Disabled for speed in noisy env
+                            condition_on_previous_text=True,
                             initial_prompt=self.FISH_PROMPT,
-                            vad_filter=False,  # Already done by noise controller
+                            vad_filter=False,
                             vad_parameters=None,
-                            without_timestamps=True,  # Faster processing
+                            without_timestamps=True,
                             word_timestamps=False
                         )
                     except Exception as e:
@@ -273,15 +326,15 @@ class WhisperRecognizer(BaseSpeechRecognizer):
                         self.final_text.emit("Waiting until 'start' is said.", 0.85)
                         try:
                             os.remove(wav_path)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(e)
                         continue
                     elif "start" in text_lower:
                         self.resume()
                         try:
                             os.remove(wav_path)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(e)
                         continue
 
                     # If paused, skip processing
@@ -289,8 +342,8 @@ class WhisperRecognizer(BaseSpeechRecognizer):
                         logger.debug("Paused: ignoring transcription")
                         try:
                             os.remove(wav_path)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(e)
                         continue
 
                     # Apply ASR corrections and parsing
@@ -349,3 +402,8 @@ class WhisperRecognizer(BaseSpeechRecognizer):
         # On exit
         self._emit_status_once("stopped")
         logger.info("Speech recognizer stopped")
+        if hasattr(self, '_session_logger'):
+            self._session_logger.log_end()
+        if hasattr(self, '_session_log_sink_id'):
+            import loguru
+            loguru.logger.remove(self._session_log_sink_id)
