@@ -1,35 +1,18 @@
-# Core GUI
 PyQt6>=6.5
-
-# Real-time STT backend
-RealtimeSTT>=0.3.100
-
-# Speech recognition (legacy / evaluation)
-faster-whisper>=1.0.0
-
-# Audio I/O
+PyQt6-sip
 sounddevice>=0.4.6
 soundfile>=0.12.1
+rapidfuzz>=3.0.0
+gtts
+RealtimeSTT>=0.3.100
+faster-whisper>=1.0.0
 numpy>=1.24
 webrtcvad>=2.0.10
-
-# Excel logging
 openpyxl>=3.1.2
-
-# Fuzzy matching
-rapidfuzz>=3.0.0
-
-# Evaluation
 jiwer>=3.0.3
-
-# Logging
 loguru>=0.7.0
-
-# Testing
 pytest>=7.4
-
-# Optional: improve Windows TLS/SSL issues when downloading models
 certifi>=2023.7.22
-
 webrtcvad-wheels~=2.0.14
 pandas~=2.3.2
+pytest
