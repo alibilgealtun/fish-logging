@@ -97,6 +97,8 @@ class WhisperRecognizer(BaseSpeechRecognizer):
         self._last_status_msg: Optional[str] = None
         self._last_fish_specie = None
 
+        self._number_sound, _ = sf.read("tests/audio/number.wav", dtype='int16')
+
         # Initialize noise controller
         self._noise_controller = NoiseController(
             sample_rate=self.SAMPLE_RATE,
@@ -278,8 +280,10 @@ class WhisperRecognizer(BaseSpeechRecognizer):
                     # Update status
                     self._emit_status_once("processing")
 
+                    # combine number sound with the current segment
+                    combined_segment = np.concatenate((self._number_sound, segment))
                     # Write segment to temporary file
-                    wav_path = self._write_wav_bytes(segment, self.SAMPLE_RATE)
+                    wav_path = self._write_wav_bytes(combined_segment, self.SAMPLE_RATE)
 
                     try:
                         assert self._model is not None
