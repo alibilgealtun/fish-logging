@@ -3,8 +3,8 @@ import os
 from datetime import datetime
 
 class SessionLogger:
-    def __init__(self, log_dir="logs"):
-        # Ensure logs/ directory exists in the project root
+    def __init__(self, log_dir="logs/sessions"):
+        # Ensure logs/sessions/ directory exists in the project root
         os.makedirs(log_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%M_%H_%d_%m_%Y")
         self.log_path = os.path.join(log_dir, f"whisper_session_{timestamp}.log")
