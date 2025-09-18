@@ -32,9 +32,18 @@ class ConfigManager:
             raise ValueError(f"Invalid JSON in {file_path}: {e}")
 
     @property
-    def known_species(self) -> List[str]:
-        """Get list of known fish species."""
-        return self.species_data["known_species"]
+    def species(self) -> List[str]:
+        """Get list of known fish species.
+
+        Supports both legacy schema with a flat "species" list and
+        the new structured schema with an ordered "items" list of
+        objects containing name and code.
+        """
+        data = self.species_data
+        if isinstance(data.get("items"), list) and data["items"]:
+            return [str(entry.get("name", "")).strip() for entry in data["items"] if str(entry.get("name", "")).strip()]
+        # Legacy fallback
+        return data.get("species", [])
 
     @property
     def species_normalization(self) -> Dict[str, str]:

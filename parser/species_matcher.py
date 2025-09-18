@@ -36,7 +36,7 @@ class SpeciesMatcher:
             Normalized species name if found, None otherwise
         """
         lowered = text.lower()
-        species_list = self.config.known_species
+        species_list = self.config.species
 
         # Strategy 1: Direct exact word boundary matching
         for candidate in species_list:
