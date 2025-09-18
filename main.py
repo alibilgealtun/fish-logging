@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# Import WebEngine before QApplication is created to avoid context errors
+from PyQt6 import QtWebEngineWidgets
+
 import sys
 import os
 from PyQt6.QtWidgets import QApplication

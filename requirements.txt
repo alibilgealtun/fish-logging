@@ -1,18 +1,22 @@
-PyQt6>=6.5
-PyQt6-sip
-sounddevice>=0.4.6
-soundfile>=0.12.1
-rapidfuzz>=3.0.0
-gtts
-RealtimeSTT>=0.3.100
-faster-whisper>=1.0.0
-numpy>=1.24
-webrtcvad>=2.0.10
-openpyxl>=3.1.2
-jiwer>=3.0.3
+# Core dependencies
+PyQt6>=6.5.0
+PyQt6-WebEngine>=6.5.0
 loguru>=0.7.0
-pytest>=7.4
-certifi>=2023.7.22
-webrtcvad-wheels~=2.0.14
-pandas~=2.3.2
-pytest
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Speech recognition
+sounddevice>=0.4.6
+webrtcvad>=2.0.10
+
+# Data visualization for graphs
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.15.0
+kaleido>=0.2.1
+
+# Excel handling
+openpyxl>=3.1.0
+
+# Audio processing
+scipy>=1.10.0
