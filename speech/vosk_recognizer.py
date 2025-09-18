@@ -3,12 +3,10 @@ from __future__ import annotations
 import os
 import json
 import time
-from typing import Optional, Set, List
+from typing import Optional, Set, List, Any
 
 import numpy as np
-import sounddevice as sd
 from loguru import logger
-from vosk import Model, KaldiRecognizer
 from PyQt6.QtCore import pyqtSignal
 
 from .base_recognizer import BaseSpeechRecognizer
@@ -47,13 +45,13 @@ class VoskRecognizer(BaseSpeechRecognizer):
 
     def __init__(self) -> None:
         super().__init__()
-        self._stream: Optional[sd.InputStream] = None
+        self._stream: Optional[Any] = None  # sounddevice.InputStream at runtime
         self._chunk_frames: int = int(self.SAMPLE_RATE * self.CHUNK_S)
         self._last_status_msg: Optional[str] = None
         self._last_fish_specie = None
 
-        self._model: Optional[Model] = None
-        self._recognizer: Optional[KaldiRecognizer] = None
+        self._model: Optional[Any] = None  # vosk.Model at runtime
+        self._recognizer: Optional[Any] = None  # vosk.KaldiRecognizer at runtime
 
         self._noise_controller = NoiseController(
             sample_rate=self.SAMPLE_RATE,
@@ -66,6 +64,8 @@ class VoskRecognizer(BaseSpeechRecognizer):
         self._stop_flag = True
         try:
             if self._stream is not None:
+                # Local import to ensure module loads only if used
+                import sounddevice as sd  # noqa: F401
                 self._stream.stop()
                 self._stream.close()
                 self._stream = None
@@ -121,7 +121,7 @@ class VoskRecognizer(BaseSpeechRecognizer):
             words = set()
 
             # Add fish species - break them into individual words
-            species_list = species_cfg.get("known_species", [])
+            species_list = species_cfg.get("species", [])
             for species in species_list:
                 if species and species.strip():
                     # Add each word in the species name
@@ -244,6 +244,8 @@ class VoskRecognizer(BaseSpeechRecognizer):
             return
             
         try:
+            # Local import of vosk to avoid heavy import during test collection
+            from vosk import Model, KaldiRecognizer  # type: ignore
             self._model = Model(model_path=model_path)
             self._recognizer = KaldiRecognizer(self._model, self.SAMPLE_RATE)
             
@@ -258,6 +260,7 @@ class VoskRecognizer(BaseSpeechRecognizer):
 
         # Open microphone
         try:
+            import sounddevice as sd  # type: ignore
             self._stream = sd.InputStream(
                 samplerate=self.SAMPLE_RATE,
                 channels=self.CHANNELS,

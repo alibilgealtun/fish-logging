@@ -4,18 +4,15 @@ import os
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Any
 
 import numpy as np
-import sounddevice as sd
-import soundfile as sf
-from faster_whisper import WhisperModel
 from loguru import logger
 from PyQt6.QtCore import pyqtSignal
-
 from .base_recognizer import BaseSpeechRecognizer
 from .noise_controller import NoiseController
 from parser import ParserResult
+import soundfile as sf
 
 
 @dataclass
@@ -58,16 +55,6 @@ class WhisperRecognizer(BaseSpeechRecognizer):
     MAX_SEGMENT_S: float = 3.0
     PADDING_MS: int = 600
 
-    FISH_PROMPT = (
-        "This is a continuous conversation about fish species and numbers (their measurements). "
-        "The user typically speaks fish specie or number. "
-        "Always prioritize fish species vocabulary over similar-sounding common words. "
-        "If a word sounds like a fish name, bias towards the fish name. "
-        "Common fish species include: trout, salmon, sea bass, tuna. "
-        "Units are typically centimeters (cm) or millimeters (mm), 'cm' is preferred in the transcript. "
-        "You might also hear 'cancel', 'wait' and 'start'."
-    )
-
     # === Model specific configs ===
     MODEL_NAME: str = "base.en"
     DEVICE: str = "cpu"
@@ -86,18 +73,28 @@ class WhisperRecognizer(BaseSpeechRecognizer):
     VAD_PARAMETERS: Optional[dict] = None
     WORD_TIMESTAMPS: bool = False
 
+    def set_last_species(self, species: str) -> None:
+        # Public setter for last species (used by UI selector)
+        try:
+            self._last_fish_specie = str(species) if species else None
+        except Exception:
+            self._last_fish_specie = None
+
     def __init__(self) -> None:
         """Initialize recognizer state and resources."""
         super().__init__()
         self._stop_flag: bool = False
         self._paused: bool = False
-        self._stream: Optional[sd.InputStream] = None
-        self._model: Optional[WhisperModel] = None
+        self._stream: Optional[Any] = None  # sounddevice.InputStream at runtime
+        self._model: Optional[Any] = None  # faster_whisper.WhisperModel at runtime
         self._chunk_frames: int = int(self.SAMPLE_RATE * self.CHUNK_S)
         self._last_status_msg: Optional[str] = None
-        self._last_fish_specie = None
 
-        self._number_sound, _ = sf.read("tests/audio/number.wav", dtype='int16')
+        # Load number marker lazily to avoid importing soundfile at module import time
+        try:
+            self._number_sound, _ = sf.read("tests/audio/number.wav", dtype='int16')
+        except Exception:
+            self._number_sound = (np.zeros(int(self.SAMPLE_RATE * 0.05))).astype(np.int16)
 
         # Initialize noise controller
         self._noise_controller = NoiseController(
@@ -113,6 +110,8 @@ class WhisperRecognizer(BaseSpeechRecognizer):
         self._stop_flag = True
         try:
             if self._stream is not None:
+                # Import here to avoid module import overhead unless needed
+                import sounddevice as sd  # noqa: F401
                 self._stream.stop()
                 self._stream.close()
                 self._stream = None
@@ -206,6 +205,8 @@ class WhisperRecognizer(BaseSpeechRecognizer):
         """Write PCM16 samples to a temporary WAV file and return its path."""
         fd, path = tempfile.mkstemp(suffix=".wav")
         os.close(fd)
+        # Local import to avoid module import overhead
+        import soundfile as sf  # type: ignore
         sf.write(path, samples_int16, samplerate, subtype="PCM_16")
         return path
 
@@ -223,6 +224,8 @@ class WhisperRecognizer(BaseSpeechRecognizer):
         """Run the realtime STT loop with integrated noise control."""
         try:
             logger.info("Loading model... (first run will download it)")
+            # Local import to avoid loading at module import time
+            from faster_whisper import WhisperModel  # type: ignore
             self._model = WhisperModel(
                 self.MODEL_NAME,
                 device=self.DEVICE,
@@ -240,6 +243,8 @@ class WhisperRecognizer(BaseSpeechRecognizer):
             return
 
         try:
+            # Local import to avoid loading at module import time
+            import sounddevice as sd  # type: ignore
             self._stream = sd.InputStream(
                 samplerate=self.SAMPLE_RATE,
                 channels=self.CHANNELS,
@@ -280,7 +285,7 @@ class WhisperRecognizer(BaseSpeechRecognizer):
                     # Update status
                     self._emit_status_once("processing")
 
-                    # combine number sound with the current segment
+                    # COMBINE NUMBER SOUND WITH SEGMENT!!! IMPORTANT PART
                     combined_segment = np.concatenate((self._number_sound, segment))
                     # Write segment to temporary file
                     wav_path = self._write_wav_bytes(combined_segment, self.SAMPLE_RATE)

@@ -17,10 +17,21 @@ class BaseSpeechRecognizer(QThread):
     status_changed = pyqtSignal(str)
     specie_detected = pyqtSignal(str)
 
+    FISH_PROMPT = (
+        "This is a continuous conversation about fish species and numbers (their measurements). "
+        "The user typically speaks fish specie or number. "
+        "Always prioritize fish species vocabulary over similar-sounding common words. "
+        "If a word sounds like a fish name, bias towards the fish name. "
+        "Common fish species include: trout, salmon, sea bass, tuna. "
+        "Units are typically centimeters (cm) or millimeters (mm), 'cm' is preferred in the transcript. "
+        "You might also hear 'cancel', 'wait' and 'start'."
+    )
+
     def __init__(self) -> None:
         super().__init__()
         self._stop_flag = False
         self._paused = False
+        self._last_fish_specie = None
 
     def run(self) -> None:
         """
