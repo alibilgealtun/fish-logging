@@ -1,11 +1,35 @@
 {
-  "known_species": [
-    "sea bass", "seabass", "cod", "mackerel", "trout", "salmon", "tuna",
-    "snapper", "grouper", "bream", "carp", "pike", "perch", "haddock",
-    "halibut", "flounder", "mullet", "anchovy", "sardine", "herring","sea mouse"
+  "items": [
+    { "name": "European plaice", "code": "PLE" },
+    { "name": "Haddock", "code": "HAD" },
+    { "name": "Whiting", "code": "WHG" },
+    { "name": "Common dab", "code": "DAB" },
+    { "name": "Atlantic cod", "code": "COD" },
+    { "name": "European flounder", "code": "FLA" },
+    { "name": "Herring", "code": "HER" },
+    { "name": "American plaice", "code": "PLA" },
+    { "name": "Norway lobster", "code": "NEP" },
+    { "name": "Hake", "code": "HKE" },
+    { "name": "Lemon sole", "code": "LEM" },
+    { "name": "Squid", "code": "SQD" },
+    { "name": "Tub gunnard", "code": "GUU" },
+    { "name": "Greater weever", "code": "WEV" },
+    { "name": "Pollock", "code": "POL" },
+    { "name": "Brill", "code": "BLL" },
+    { "name": "Common dragonet", "code": "DRG" },
+    { "name": "Sculpin", "code": "SCU" },
+    { "name": "Monkfish", "code": "MON" },
+    { "name": "Common sole", "code": "SOL" }
   ],
   "normalization": {
-    "seabass": "sea bass",
-    "sea-bass": "sea bass"
+    "european-plaice": "European plaice",
+    "atlantic-cod": "Atlantic cod",
+    "norway-lobster": "Norway lobster",
+    "lemon-sole": "Lemon sole",
+    "tub-gunnard": "Tub gunnard",
+    "greater-weever": "Greater weever",
+    "common-dab": "Common dab",
+    "common-dragonet": "Common dragonet",
+    "common-sole": "Common sole"
   }
 }
