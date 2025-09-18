@@ -5,6 +5,8 @@ from .ModernTable import ModernTable
 from .ModernTextEdit import ModernTextEdit
 from .PulsingStatusIndicator import PulsingStatusIndicator
 from .BoatNameInput import BoatNameInput
+from .SpeciesSelector import SpeciesSelector
+from .StationIdInput import StationIdInput
 
 __all__ = [
     'AnimatedButton',
@@ -14,4 +16,6 @@ __all__ = [
     'ModernTextEdit',
     'PulsingStatusIndicator',
     'BoatNameInput',
+    'SpeciesSelector',
+    'StationIdInput',
 ]

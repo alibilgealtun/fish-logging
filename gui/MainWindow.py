@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -11,10 +11,12 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
     QWidget, QPushButton, QLabel, QGraphicsBlurEffect, QHeaderView,
+    QTabWidget, QStyle,
 )
 from loguru import logger
 from parser import FishParser
 from .widgets import *
+from .widgets.ReportWidget import ReportWidget
 
 
 class MainWindow(QMainWindow):
@@ -106,6 +108,58 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
 
+        # Build main logging tab content
+        logging_tab = self._create_main_tab()
+
+        # Reports tab
+        self.report_widget = ReportWidget()
+
+        # Tabs container
+        self.tabs = QTabWidget()
+        self.tabs.addTab(logging_tab, "🎣 Fish Logging")
+        self.tabs.addTab(self.report_widget, "📊 Reports")
+        # Start/stop recognizer when switching tabs
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.addWidget(self.tabs)
+        central.setLayout(main_layout)
+
+        self.statusBar().showMessage("🎧 Ready to capture your fishing stories...")
+
+        # Initialize recognizer's last species from current selector value
+        try:
+            init_species = getattr(self, 'species_selector', None)
+            if init_species is not None:
+                cur = self.species_selector.currentSpecies()
+                if cur and hasattr(self.speech_recognizer, 'set_last_species'):
+                    self.speech_recognizer.set_last_species(cur)
+        except Exception:
+            pass
+
+        # Button signals belong to logging tab controls
+        self.btn_stop.clicked.connect(self._on_stop)
+        self.btn_start.clicked.connect(self._on_start)
+
+    def _on_tab_changed(self, index: int) -> None:
+        """Pause recognizer in Reports, resume in Fish Logging; render default chart in Reports."""
+        try:
+            if self.tabs.widget(index) is self.report_widget:
+                # Entering Reports -> stop listening and show first chart
+                self._on_stop()
+                # Render a default chart once
+                if hasattr(self.report_widget, "show_default_chart"):
+                    self.report_widget.show_default_chart()
+            else:
+                # Returning to Fish Logging -> start listening
+                self._on_start()
+        except Exception as e:
+            logger.error(f"Tab change handler failed: {e}")
+
+    def _create_main_tab(self) -> QWidget:
+        """Create and return the main logging tab UI as a QWidget."""
+        main_tab = QWidget()
 
         # Live transcription section with glassmorphism
         transcription_panel = GlassPanel()
@@ -134,55 +188,50 @@ class MainWindow(QMainWindow):
         table_layout.setSpacing(16)
         table_layout.setContentsMargins(24, 20, 24, 20)
 
-
-
         header_row = QHBoxLayout()
         table_header = ModernLabel("📊 Logged Entries", "header")
 
         self.boat_input = BoatNameInput()
+        self.station_input = StationIdInput()
 
         self.current_specie_label = ModernLabel("🐟 Current:", style="subheader")
 
-        self.current_specie_value = ModernLabel("—", style="subheader")
-        self.current_specie_value.setStyleSheet("""
-            QLabel {
-                color: #FFD700;        
-                font-weight: 700;
-                font-size: 18px;
-                padding-left: 0px;
-                margin-left: 0px;
-            }
-        """)
+        # Replace label with SpeciesSelector (searchable dropdown with numbering + codes)
+        self.species_selector = SpeciesSelector()
+        self.species_selector.setMinimumWidth(240)
 
         header_row.addWidget(table_header)
-
         header_row.setContentsMargins(0, 0, 0, 0)
         header_row.setSpacing(6)
         header_row.addWidget(self.current_specie_label)
-        header_row.addWidget(self.current_specie_value)
+        header_row.addWidget(self.species_selector)
         header_row.addStretch()
 
-
-        header_row.addStretch(1)
+        header_row.addWidget(self.station_input)
         header_row.addWidget(self.boat_input)
         table_layout.addLayout(header_row)
 
-
-        self.table = ModernTable(0, 7)
-        self.table.setHorizontalHeaderLabels(["📅 Date", "⏰ Time","⛵ Boat", "🐟 Species", "📏 Length (cm)", "🎯 Confidence", "🗑"])
+        # Update table to show only visible columns (Date, Time, Species, Length, Trash)
+        self.table = ModernTable(0, 5)
+        self.table.setHorizontalHeaderLabels(["📅 Date", "⏰ Time", "🐟 Species", "📏 Length (cm)", "🗑"])
         self.table.verticalHeader().setVisible(False)
         self.table.setSortingEnabled(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setAlternatingRowColors(True)
-        # Set a tight width for the trash column and let others expand
         header = self.table.horizontalHeader()
         try:
-            header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+            # Make Date and Time columns a bit narrower
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+            header.resizeSection(0, 200)
+            header.resizeSection(1, 200)
+            # Fixed width for trash column
+            header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
         except Exception as e:
             logger.error(str(e))
-        header.resizeSection(6, 44)
+        header.resizeSection(4, 44)
         table_layout.addWidget(self.table)
 
         # Control panel with glassmorphism
@@ -219,10 +268,9 @@ class MainWindow(QMainWindow):
 
         control_layout.addWidget(status_container)
         control_layout.addStretch(1)
-
         table_layout.addWidget(control_panel)
 
-        # Main splitter
+        # Main splitter for the logging tab
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(transcription_panel)
         splitter.addWidget(table_panel)
@@ -230,15 +278,12 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([150, 550])
 
-        main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.addWidget(splitter)
-        central.setLayout(main_layout)
+        main_tab_layout = QVBoxLayout()
+        main_tab_layout.setContentsMargins(20, 20, 20, 20)
+        main_tab_layout.addWidget(splitter)
+        main_tab.setLayout(main_tab_layout)
 
-        self.statusBar().showMessage("🎧 Ready to capture your fishing stories...")
-
-        self.btn_stop.clicked.connect(self._on_stop)
-        self.btn_start.clicked.connect(self._on_start)
+        return main_tab
 
     def _connect_signals(self) -> None:
         # Avoid duplicate connections by disconnecting if already connected
@@ -273,8 +318,27 @@ class MainWindow(QMainWindow):
                 pass
             self.speech_recognizer.specie_detected.connect(self._on_specie_detected)
 
+        # When user changes selection manually, update status bar and recognizer
+        try:
+            self.species_selector.speciesChanged.connect(self._on_species_selected)
+        except Exception:
+            pass
+
     def _on_specie_detected(self, specie: str) -> None:
-        self.current_specie_value.setText(specie)
+        # Sync detected species with selector (best-effort)
+        try:
+            self.species_selector.setCurrentByName(specie)
+        except Exception:
+            pass
+
+    def _on_species_selected(self, name: str) -> None:
+        # Update recognizer last species and status
+        try:
+            if hasattr(self.speech_recognizer, 'set_last_species'):
+                self.speech_recognizer.set_last_species(name)
+        except Exception:
+            pass
+        self.statusBar().showMessage(f"Current species: {name}")
 
     def _on_partial_text(self, text: str) -> None:
         # Show last partial text in live panel and log to console
@@ -304,48 +368,71 @@ class MainWindow(QMainWindow):
         if result.species and result.length_cm is not None:
             # Log and update table (newest first)
             try:
-                self.current_specie_value.setText(result.species)
+                # Update selector
+                try:
+                    self.species_selector.setCurrentByName(result.species)
+                except Exception:
+                    pass
                 boat_name = self.boat_input.get_boat_name()
                 self.boat_input.save_boat_name()
-                self.excel_logger.log_entry(result.species, result.length_cm, confidence, boat_name)
+                station_id = self.station_input.get_station_id()
+                self.station_input.save_station_id()
+                self.excel_logger.log_entry(result.species, result.length_cm, confidence, boat_name, station_id)
                 logger.info(f"[excel] Logged {result.species} {result.length_cm:.1f} cm conf={confidence:.2f}")
-                self._prepend_table_row(result.species, result.length_cm, confidence, boat_name)
+                self._prepend_table_row(result.species, result.length_cm, confidence, boat_name, station_id)
                 self.statusBar().showMessage("🎣 Great catch logged successfully!", 2000)
             except Exception as e:
                 self._alert(f"Failed to log to Excel: {e}")
 
-    def _prepend_table_row(self, species: str, length_cm: float, confidence: float, boat: str) -> None:
-        # Excel has date/time; here we show current
+    def _prepend_table_row(self, species: str, length_cm: float, confidence: float, boat: str, station: str) -> None:
+        # Show only Date, Time, Species, Length in table (Boat/Station/Confidence hidden, but logged)
         from datetime import datetime
         now = datetime.now()
         date_str = now.strftime("%Y-%m-%d")
         time_str = now.strftime("%H:%M:%S")
         self.table.insertRow(0)
-        self.table.setItem(0, 0, QTableWidgetItem(date_str))
-        self.table.setItem(0, 1, QTableWidgetItem(time_str))
-        self.table.setItem(0, 2, QTableWidgetItem(boat or "—"))
-        self.table.setItem(0, 3, QTableWidgetItem(species))
-        self.table.setItem(0, 4, QTableWidgetItem(f"{length_cm:.1f}"))
-        self.table.setItem(0, 5, QTableWidgetItem(f"{confidence:.2f}"))
+        # Create centered items
+        it_date = QTableWidgetItem(date_str)
+        it_time = QTableWidgetItem(time_str)
+        it_species = QTableWidgetItem(species)
+        it_length = QTableWidgetItem(f"{length_cm:.1f}")
+        for it in (it_date, it_time, it_species, it_length):
+            try:
+                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            except Exception:
+                pass
+        self.table.setItem(0, 0, it_date)
+        self.table.setItem(0, 1, it_time)
+        self.table.setItem(0, 2, it_species)
+        self.table.setItem(0, 3, it_length)
         self.table.setRowHeight(0, 46)
 
-
-        btn_delete = QPushButton("🗑")
-        btn_delete.setFixedSize(15,30)
+        # Trash button using standard icon; bind robust row deletion handler
+        btn_delete = QPushButton()
+        btn_delete.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
+        btn_delete.setIconSize(QSize(18, 18))
+        btn_delete.setFixedSize(28, 28)
         btn_delete.setStyleSheet("""
-            QPushButton {
-                font-size: 25px; 
-                border: none;
-                background: transparent;
-            }
-            QPushButton:hover {
-                color: red;  /* Make it turn red when hovered */
-            }
+            QPushButton { border: none; background: transparent; }
+            QPushButton:hover { color: red; }
         """)
-
         btn_delete.setFlat(True)
-        btn_delete.clicked.connect(lambda _, row=0: self._remove_table_row(row))
-        self.table.setCellWidget(0, 6, btn_delete)
+        btn_delete.clicked.connect(self._on_delete_clicked)
+        self.table.setCellWidget(0, 4, btn_delete)
+
+    def _on_delete_clicked(self) -> None:
+        """Delete the row that contains the clicked trash button."""
+        try:
+            sender = self.sender()
+            if sender is None:
+                return
+            last_col = 4
+            for r in range(self.table.rowCount()):
+                if self.table.cellWidget(r, last_col) is sender:
+                    self._remove_table_row(r)
+                    break
+        except Exception as e:
+            logger.error(f"Delete click failed: {e}")
 
     def _remove_last_table_row(self) -> None:
         if self.table.rowCount() > 0:
