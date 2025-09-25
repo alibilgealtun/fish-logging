@@ -16,4 +16,7 @@ def __getattr__(name: str):
     if name == "WhisperXRecognizer":
         from .whisperx_recognizer import WhisperXRecognizer
         return WhisperXRecognizer
+    if name == "GoogleSpeechRecognizer":
+        from .google_speech_recognizer import GoogleSpeechRecognizer
+        return GoogleSpeechRecognizer
     raise AttributeError(f"module 'speech' has no attribute {name!r}")

@@ -8,6 +8,14 @@ pandas>=2.0.0
 # Speech recognition
 sounddevice>=0.4.6
 webrtcvad>=2.0.10
+soundfile>=0.12.1
+# Google Cloud STT
+google-cloud-speech>=2.26,<3
+
+# Whisper model backends (optional, used in tests and selectable recognizers)
+faster-whisper>=1.0.0
+whisperx>=3.1.0
+insanely-fast-whisper>=0.0.15
 
 # Data visualization for graphs
 matplotlib>=3.7.0
@@ -20,3 +28,7 @@ openpyxl>=3.1.0
 
 # Audio processing
 scipy>=1.10.0
+
+# Testing
+devtools>=0.12.2
+pytest>=8.0.0

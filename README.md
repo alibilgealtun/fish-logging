@@ -37,3 +37,38 @@ python main.py
 ### Notes
 - Windows 10/11 primary target; Linux supported
 - If your microphone is not the default input, set it in Windows Sound settings or modify `speech.py` to choose a device.
+
+# Fish Logging
+
+This application supports multiple speech-to-text engines optimized for fish species and measurements.
+
+## Engines
+- Whisper (default)
+- Vosk
+- Google Cloud Speech-to-Text (new)
+
+## Google Cloud Speech-to-Text
+
+1) Enable API and create credentials
+- In Google Cloud Console, enable “Cloud Speech-to-Text API”.
+- Create a Service Account with role: Speech-to-Text User.
+- Create a JSON key and download it.
+
+2) Provide credentials
+- Option A: Set the environment variable
+  - macOS/Linux:
+    export GOOGLE_APPLICATION_CREDENTIALS="/absolute/path/to/key.json"
+  - Windows (PowerShell):
+    $env:GOOGLE_APPLICATION_CREDENTIALS="C:\\path\\to\\key.json"
+- Option B: Place the key file at the project root named google.json (auto-detected).
+
+3) Install dependencies
+pip install -r requirements.txt
+
+4) Run with Google engine
+python main.py --model=google
+
+Notes
+- The recognizer uses phrase hints from config/species.json, config/numbers.json, and config/units.json to bias recognition.
+- Real-time mode uses a noise controller and voice activity detection to segment audio and sends short segments to Google for recognition.
+- Use commands “wait” and “start” to pause/resume parsing.

@@ -273,3 +273,11 @@ testing_tt.py
 logs.xlsx
 .DS_Store
 /samples
+/models
+/tests/audio
+/tests/results
+*.m4a
+organize_audio_files.py
+*.wav
+/reports/output
+google.json
