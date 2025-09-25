@@ -9,6 +9,7 @@ pandas>=2.0.0
 sounddevice>=0.4.6
 webrtcvad>=2.0.10
 soundfile>=0.12.1
+rapidfuzz
 # Google Cloud STT
 google-cloud-speech>=2.26,<3
 
