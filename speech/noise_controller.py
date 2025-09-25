@@ -5,6 +5,9 @@ import queue
 import webrtcvad
 from scipy.signal import butter, lfilter
 
+# Integrate adaptive spectral suppressor (shared with WAV path)
+from noise_removing import AdaptiveNoiseSuppressor, SuppressorConfig
+
 
 class NoiseController:
     """
@@ -33,8 +36,12 @@ class NoiseController:
         self.max_segment_s = max_segment_s
 
         # High-pass filter (kill engine rumble <100 Hz)
-        self.hp_b, self.hp_a = butter(
-            N=6, Wn=100 / (sample_rate / 2), btype="highpass"
+        _ba = butter(N=6, Wn=100 / (sample_rate / 2), btype="highpass")
+        self.hp_b, self.hp_a = _ba[0], _ba[1]
+
+        # Adaptive spectral suppressor (same algorithm used for WAV path)
+        self._suppressor = AdaptiveNoiseSuppressor(
+            SuppressorConfig(sample_rate=sample_rate, frame_ms=30)
         )
 
         # Queue for streaming audio from sounddevice
@@ -56,7 +63,7 @@ class NoiseController:
             return audio
         audio_float = audio.astype(np.float32) / 32767.0
         filtered = lfilter(self.hp_b, self.hp_a, audio_float)
-        return (filtered * 32767).astype(np.int16)
+        return np.asarray(filtered * 32767.0, dtype=np.int16)
 
     def collect_segments(self, padding_ms: int = 800):
         """
@@ -91,13 +98,16 @@ class NoiseController:
                 buf = buf[frame_size:]
 
                 # Step 1: filter engine rumble
-                frame = self._highpass_filter(frame)
+                frame_hp = self._highpass_filter(frame)
 
-                # Step 2: check with VAD
-                is_speech = self.vad.is_speech(frame.tobytes(), self.sample_rate)
+                # Step 2: check with VAD on filtered frame
+                is_speech = self.vad.is_speech(frame_hp.tobytes(), self.sample_rate)
+
+                # Step 3: spectral denoise (same algorithm as WAV path)
+                frame_dn = self._suppressor.enhance_frame(frame_hp, is_speech=is_speech)
 
                 if is_speech:
-                    voiced_frames.append(frame)
+                    voiced_frames.append(frame_dn)
                     silence_frames = 0
                     voiced = True
                 else:
