@@ -80,9 +80,9 @@ class WhisperRecognizer(BaseSpeechRecognizer):
         except Exception:
             self._last_fish_specie = None
 
-    def __init__(self) -> None:
+    def __init__(self, language: str = "en-US") -> None:
         """Initialize recognizer state and resources."""
-        super().__init__()
+        super().__init__(language=language)
         self._stop_flag: bool = False
         self._paused: bool = False
         self._stream: Optional[Any] = None  # sounddevice.InputStream at runtime
@@ -136,7 +136,7 @@ class WhisperRecognizer(BaseSpeechRecognizer):
         )
 
         from logger.session_logger import SessionLogger
-        self._session_logger = SessionLogger(log_dir="logs")
+        self._session_logger = SessionLogger()
         self._session_logger.log_start(self.get_config())
         import loguru
         self._session_log_sink_id = loguru.logger.add(self._session_logger.log_path, format="[{time:YYYY-MM-DD HH:mm:ss}] {level}: {message}", level="INFO")

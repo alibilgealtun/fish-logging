@@ -27,11 +27,12 @@ class BaseSpeechRecognizer(QThread):
         "You might also hear 'cancel', 'wait' and 'start'."
     )
 
-    def __init__(self) -> None:
+    def __init__(self, language: str = "en-US") -> None:
         super().__init__()
         self._stop_flag = False
         self._paused = False
         self._last_fish_specie = None
+        self.language = language
 
     def run(self) -> None:
         """

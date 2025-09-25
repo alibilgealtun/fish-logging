@@ -137,7 +137,7 @@ class WhisperXRecognizer(BaseSpeechRecognizer):
         )
 
         from logger.session_logger import SessionLogger
-        self._session_logger = SessionLogger(log_dir="logs")
+        self._session_logger = SessionLogger()
         self._session_logger.log_start(self.get_config())
         import loguru
         self._session_log_sink_id = loguru.logger.add(
