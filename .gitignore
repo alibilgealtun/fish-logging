@@ -282,3 +282,5 @@ organize_audio_files.py
 /reports/output
 google.json
 tests/data/numbers.json
+tmp_sepformer/hyperparams.yaml
+/tmp_sepformer
