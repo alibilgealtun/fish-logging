@@ -13,7 +13,7 @@ from loguru import logger
 from PyQt6.QtCore import pyqtSignal
 
 from .base_recognizer import BaseSpeechRecognizer
-from .noise_controller import NoiseController
+from noise.controller import NoiseController
 from parser import ParserResult
 
 # Attempt to import whisperx in a defensive way

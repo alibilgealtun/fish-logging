@@ -8,7 +8,7 @@ import numpy as np
 import soundfile as sf
 from scipy.signal import resample_poly
 
-from speech.noise_controller import NoiseController
+from noise.noise_controller import NoiseController
 
 
 def resample_to_16k(pcm16: np.ndarray, sr: int, target_sr: int = 16000) -> np.ndarray:

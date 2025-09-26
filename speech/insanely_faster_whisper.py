@@ -13,8 +13,7 @@ from loguru import logger
 from PyQt6.QtCore import pyqtSignal
 
 from .base_recognizer import BaseSpeechRecognizer
-from .noise_controller import NoiseController
-from parser import ParserResult
+from noise.controller import NoiseController
 
 # Defensive import for insanely-fast-whisper
 _try_ifw = True

@@ -7,7 +7,7 @@ import numpy as np
 from loguru import logger
 import soundfile as sf
 from PyQt6.QtCore import pyqtSignal
-from .noise_controller import NoiseController
+from noise.controller import NoiseController
 import json
 
 

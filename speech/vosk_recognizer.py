@@ -3,14 +3,14 @@ from __future__ import annotations
 import os
 import json
 import time
-from typing import Optional, Set, List, Any
+from typing import Optional, List, Any
 
 import numpy as np
 from loguru import logger
 from PyQt6.QtCore import pyqtSignal
 
 from .base_recognizer import BaseSpeechRecognizer
-from .noise_controller import NoiseController
+from noise.controller import NoiseController
 from parser import ParserResult
 
 

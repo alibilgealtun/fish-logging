@@ -10,7 +10,7 @@ import numpy as np
 from loguru import logger
 from PyQt6.QtCore import pyqtSignal
 from .base_recognizer import BaseSpeechRecognizer
-from .noise_controller import NoiseController
+from noise.controller import NoiseController
 from parser import ParserResult
 import soundfile as sf
 
@@ -49,11 +49,6 @@ class WhisperRecognizer(BaseSpeechRecognizer):
     CHANNELS: int = 1
     CHUNK_S: float = 0.5
 
-    # Noise controller settings - optimized for engine noise + background speech
-    VAD_MODE: int = 2 # More aggressive VAD for noisy environments
-    MIN_SPEECH_S: float = 0.4
-    MAX_SEGMENT_S: float = 3.0
-    PADDING_MS: int = 600
 
     # === Model specific configs ===
     MODEL_NAME: str = "base.en"
