@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import pandas as pd
-import matplotlib.pyplot as plt
+# Make matplotlib optional at import time to avoid hard failures in environments without it
+try:
+    import matplotlib.pyplot as plt  # type: ignore
+except Exception:  # pragma: no cover
+    plt = None  # type: ignore
 import seaborn as sns
 
 # Use Plotly for interactive, modern charts
@@ -27,6 +31,8 @@ except Exception:  # pragma: no cover - optional at import time; UI will guard u
 CHART_TYPES = {
     "species_pie": "Species Composition (Pie)",
     "species_avg_length_bar": "Average Length by Species (Bar)",
+    "species_count_bar": "Total Count by Species (Bar)",
+    "species_length_distribution": "Length Distribution (Select Species)",
 }
 
 
@@ -51,11 +57,16 @@ class ReportExporter:
 
 class PDFExporter(ReportExporter):
     def export(self, report_data: Dict, output_path: Path) -> None:
-        from matplotlib.backends.backend_pdf import PdfPages
+        # Import inside method and guard availability
+        try:
+            from matplotlib.backends.backend_pdf import PdfPages  # type: ignore
+            import matplotlib.pyplot as _plt  # type: ignore
+        except Exception as e:  # pragma: no cover
+            raise RuntimeError("Matplotlib is required for PDF export. Install with: pip install matplotlib") from e
         from io import BytesIO
 
         figures = report_data.get("figures", [])
-        with PdfPages(output_path) as pdf:
+        with PdfPages(output_path) as pdf:  # type: ignore
             for fig in figures:
                 try:
                     # If it's a Plotly figure, rasterize to PNG via Kaleido
@@ -63,18 +74,18 @@ class PDFExporter(ReportExporter):
                         png_bytes = fig.to_image(format="png", scale=2)
                         # Place image onto a matplotlib figure page
                         img_buf = BytesIO(png_bytes)
-                        img = plt.imread(img_buf, format='png')
+                        img = _plt.imread(img_buf, format='png')
                         h, w = img.shape[:2]
                         # Create figure sized to image aspect
                         dpi = 100
                         fig_w = w / dpi
                         fig_h = h / dpi
-                        mfig = plt.figure(figsize=(fig_w, fig_h), dpi=dpi)
+                        mfig = _plt.figure(figsize=(fig_w, fig_h), dpi=dpi)
                         ax = mfig.add_axes([0, 0, 1, 1])
                         ax.axis('off')
                         ax.imshow(img)
                         pdf.savefig(mfig, bbox_inches="tight", pad_inches=0)
-                        plt.close(mfig)
+                        _plt.close(mfig)
                     else:
                         # Fallback: assume matplotlib Figure
                         pdf.savefig(fig, bbox_inches="tight")
@@ -83,13 +94,13 @@ class PDFExporter(ReportExporter):
                     try:
                         png_bytes = getattr(fig, "to_image")(format="png", scale=2)  # type: ignore[misc]
                         img_buf = BytesIO(png_bytes)
-                        img = plt.imread(img_buf, format='png')
-                        mfig = plt.figure(figsize=(8, 6))
+                        img = _plt.imread(img_buf, format='png')
+                        mfig = _plt.figure(figsize=(8, 6))
                         ax = mfig.add_axes([0, 0, 1, 1])
                         ax.axis('off')
                         ax.imshow(img)
                         pdf.savefig(mfig, bbox_inches="tight", pad_inches=0)
-                        plt.close(mfig)
+                        _plt.close(mfig)
                     except Exception:
                         # Skip figures that cannot be exported
                         continue
@@ -145,52 +156,59 @@ class LengthDistributionReportGenerator:
 
     def _setup_modern_style(self) -> None:
         """Configure modern matplotlib + seaborn styling."""
-        plt.style.use("default")  # Start with clean slate
+        if plt is None:  # If matplotlib isn't available, skip style setup gracefully
+            return
+        try:
+            plt.style.use("default")  # Start with clean slate
 
-        # Set matplotlib parameters for modern look
-        plt.rcParams.update({
-            'figure.facecolor': 'white',
-            'axes.facecolor': '#fafafa',
-            'axes.edgecolor': '#e0e0e0',
-            'axes.linewidth': 1.2,
-            'axes.grid': True,
-            'axes.axisbelow': True,
-            'axes.labelcolor': '#2c3e50',
-            'axes.titlesize': 16,
-            'axes.titleweight': 'bold',
-            'axes.titlepad': 16,
-            'axes.labelsize': 12,
-            'axes.spines.top': False,
-            'axes.spines.right': False,
-            'axes.spines.left': True,
-            'axes.spines.bottom': True,
-            'grid.color': '#e8e8e8',
-            'grid.linewidth': 0.8,
-            'grid.alpha': 0.9,
-            'xtick.color': '#7f8c8d',
-            'ytick.color': '#7f8c8d',
-            'xtick.labelsize': 10,
-            'ytick.labelsize': 10,
-            'legend.frameon': True,
-            'legend.fancybox': True,
-            'legend.shadow': False,
-            'legend.framealpha': 1.0,
-            'legend.facecolor': 'white',
-            'legend.edgecolor': '#e0e0e0',
-            'font.family': ['SF Pro Display', 'Segoe UI', 'system-ui', 'sans-serif'],
-            'font.size': 11,
-            'figure.autolayout': True,
-        })
+            # Set matplotlib parameters for modern look
+            plt.rcParams.update({
+                'figure.facecolor': 'white',
+                'axes.facecolor': '#fafafa',
+                'axes.edgecolor': '#e0e0e0',
+                'axes.linewidth': 1.2,
+                'axes.grid': True,
+                'axes.axisbelow': True,
+                'axes.labelcolor': '#2c3e50',
+                'axes.titlesize': 16,
+                'axes.titleweight': 'bold',
+                'axes.titlepad': 16,
+                'axes.labelsize': 12,
+                'axes.spines.top': False,
+                'axes.spines.right': False,
+                'axes.spines.left': True,
+                'axes.spines.bottom': True,
+                'grid.color': '#e8e8e8',
+                'grid.linewidth': 0.8,
+                'grid.alpha': 0.9,
+                'xtick.color': '#7f8c8d',
+                'ytick.color': '#7f8c8d',
+                'xtick.labelsize': 10,
+                'ytick.labelsize': 10,
+                'legend.frameon': True,
+                'legend.fancybox': True,
+                'legend.shadow': False,
+                'legend.framealpha': 1.0,
+                'legend.facecolor': 'white',
+                'legend.edgecolor': '#e0e0e0',
+                'font.family': ['SF Pro Display', 'Segoe UI', 'system-ui', 'sans-serif'],
+                'font.size': 11,
+                'figure.autolayout': True,
+            })
 
-        # Set the modern color cycle
-        plt.rcParams['axes.prop_cycle'] = plt.cycler(color=self._modern_colors)
-
+            # Set the modern color cycle
+            plt.rcParams['axes.prop_cycle'] = plt.cycler(color=self._modern_colors)
+        except Exception:
+            pass
         # Seaborn theme
         try:
             sns.set_theme(style="whitegrid", context="talk", palette=self._modern_colors)
         except Exception:
             # Fallback if seaborn version differs
-            sns.set_style("whitegrid")
+            try:
+                sns.set_style("whitegrid")
+            except Exception:
+                pass
 
     # Data loading/cleaning
     def load_data(self) -> pd.DataFrame:
@@ -300,8 +318,78 @@ class LengthDistributionReportGenerator:
                 height=max(320, 22 * len(agg)),
             )
             return fig
+
+        if key == "species_count_bar":
+            agg = df.groupby("Species").size().reset_index(name="Count").sort_values("Count", ascending=True)
+            if agg.empty:
+                return go.Figure()
+            fig = px.bar(
+                agg,
+                x="Count",
+                y="Species",
+                orientation="h",
+                color="Species",
+                color_discrete_sequence=self._plotly_color_discrete,
+                text="Count",
+            )
+            fig.update_traces(texttemplate="%{x}", textposition="outside", cliponaxis=False)
+            fig.update_layout(
+                title_text="Total Count by Species",
+                xaxis_title="Count",
+                yaxis_title="Species",
+                showlegend=False,
+                margin=dict(l=10, r=10, t=50, b=10),
+                height=max(320, 22 * len(agg)),
+            )
+            return fig
         # Fallback
         return self.create_plotly_chart(df, "species_pie")
+
+    def create_species_length_chart(self, df: pd.DataFrame, species: str):
+        """Create an interactive Plotly histogram for a single species' length distribution.
+
+        Returns an empty figure if there is no data for the species.
+        """
+        if px is None or go is None:
+            raise RuntimeError("Plotly is not installed. Please install 'plotly' and 'kaleido'.")
+        try:
+            sp = str(species).strip()
+        except Exception:
+            sp = species
+        if not sp:
+            return go.Figure()
+        part = df[df["Species"] == sp]
+        if part.empty:
+            # Empty figure with a friendly annotation
+            fig = go.Figure()
+            fig.update_layout(
+                title_text=f"No data for species: {sp}",
+                margin=dict(l=10, r=10, t=50, b=10),
+                height=380,
+            )
+            return fig
+        # Basic histogram with box marginal and mean line
+        fig = px.histogram(
+            part,
+            x="Length (cm)",
+            nbins=20,
+            opacity=0.85,
+            marginal="box",
+            color_discrete_sequence=[self._plotly_color_discrete[0]],
+        )
+        mean_val = float(part["Length (cm)"].mean())
+        min_v = float(part["Length (cm)"].min())
+        max_v = float(part["Length (cm)"].max())
+        count = int(len(part))
+        fig.add_vline(x=mean_val, line_dash="dash", line_color="#e74c3c", annotation_text=f"Mean: {mean_val:.2f} cm", annotation_position="top")
+        fig.update_layout(
+            title_text=f"Length Distribution - {sp} (n={count}, min={min_v:.1f}, mean={mean_val:.1f}, max={max_v:.1f})",
+            xaxis_title="Length (cm)",
+            yaxis_title="Frequency",
+            margin=dict(l=10, r=10, t=60, b=10),
+            height=420,
+        )
+        return fig
 
     # Plots assembled for export (now using Plotly)
     def create_figures(self, df: pd.DataFrame) -> List[object]:
@@ -396,6 +484,23 @@ class LengthDistributionReportGenerator:
             fig6.update_layout(title_text="Species Composition")
             figs.append(fig6)
 
+        if not species_counts.empty:
+            agg2 = species_counts.reset_index()
+            agg2.columns = ["Species", "Count"]
+            agg2 = agg2.sort_values("Count", ascending=True)
+            fig7 = px.bar(
+                agg2,
+                x="Count",
+                y="Species",
+                orientation="h",
+                color="Species",
+                color_discrete_sequence=self._plotly_color_discrete,
+                text="Count",
+            )
+            fig7.update_traces(texttemplate="%{x}", textposition="outside", cliponaxis=False)
+            fig7.update_layout(title_text="Total Count by Species", xaxis_title="Count", yaxis_title="Species", showlegend=False)
+            figs.append(fig7)
+
         return figs
 
     # Orchestration
@@ -434,7 +539,11 @@ class LengthDistributionReportGenerator:
             exp.export(report_data, out_path)
             exported[ft] = out_path
         # Close any matplotlib figures we created internally
-        plt.close('all')
+        try:
+            if plt is not None:
+                plt.close('all')
+        except Exception:
+            pass
 
         report_data["exported_files"] = exported
         return report_data
