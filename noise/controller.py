@@ -108,7 +108,11 @@ class NoiseController:
             except Exception:
                 break
             if data.size == 0:
-                # End-of-stream sentinel
+                # End-of-stream sentinel -> flush any pending voiced frames
+                if voiced and voiced_frames:
+                    segment = np.concatenate(voiced_frames)
+                    if segment.size / self.sample_rate >= self.min_speech_s:
+                        yield segment
                 break
 
             # Accumulate and process in fixed-size frames
@@ -169,7 +173,12 @@ class NoiseController:
             except Exception:
                 break
             if data.size == 0:
-                # End-of-stream sentinel
+                # End-of-stream sentinel -> flush any pending voiced frames
+                if voiced and voiced_frames:
+                    segment = np.concatenate(voiced_frames)
+                    end_ts = time.time()
+                    if segment.size / self.sample_rate >= self.min_speech_s:
+                        yield segment, (start_ts or end_ts), end_ts
                 break
 
             buf = np.concatenate((buf, data)) if buf.size else data
