@@ -1,7 +1,7 @@
 """
 Length Distribution Report Generator
 
-Generates exportable reports (PDF/Excel) with graphs and raw data for
+Generates exportable reports (PDF) with graphs and raw data for
 length distribution by hauls using logs/hauls/logs.xlsx.
 """
 from __future__ import annotations
@@ -112,40 +112,11 @@ class PDFExporter(ReportExporter):
             info["CreationDate"] = datetime.now()
 
 
-class ExcelExporter(ReportExporter):
-    def export(self, report_data: Dict, output_path: Path) -> None:
-        with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-            if "raw_data" in report_data:
-                report_data["raw_data"].to_excel(writer, sheet_name="Raw Data", index=False)
-            if "haul_summaries" in report_data:
-                summary_df = pd.DataFrame([
-                    {
-                        "Haul ID": h.haul_id,
-                        "Date": h.date,
-                        "Boat": h.boat,
-                        "Species Count": h.species_count,
-                        "Total Fish": h.total_fish,
-                        "Average Length (cm)": h.avg_length,
-                        "Std Length (cm)": h.std_length,
-                        "Min Length (cm)": h.min_length,
-                        "Max Length (cm)": h.max_length,
-                        "Avg Confidence": h.confidence_avg,
-                    }
-                    for h in report_data["haul_summaries"]
-                ])
-                summary_df.to_excel(writer, sheet_name="Haul Summary", index=False)
-            if "species_distribution" in report_data:
-                report_data["species_distribution"].to_excel(
-                    writer, sheet_name="Species Distribution", index=False
-                )
-
-
 class LengthDistributionReportGenerator:
     def __init__(self, data_path: Optional[Path] = None) -> None:
         self.data_path = Path(data_path) if data_path else Path("logs/hauls/logs.xlsx")
         self.exporters: Dict[str, ReportExporter] = {
             "pdf": PDFExporter(),
-            "excel": ExcelExporter(),
         }
         # Modern plot styling for Matplotlib exports
         self._modern_colors = ['#3498db', '#e74c3c', '#2ecc71', '#f39c12', '#9b59b6',
@@ -220,12 +191,20 @@ class LengthDistributionReportGenerator:
         if missing:
             raise ValueError(f"Missing required columns: {missing}")
         # Normalize types
+        # Parse dates to a consistent dtype and drop invalid rows
+        date_parsed = pd.to_datetime(df["Date"], errors="coerce")
+        df = df[~date_parsed.isna()].copy()
+        df.loc[:, "Date"] = date_parsed.loc[df.index].dt.date  # store as date objects for stable min/max
+        # Numeric columns
         df["Length (cm)"] = pd.to_numeric(df["Length (cm)"], errors="coerce")
         df["Confidence"] = pd.to_numeric(df["Confidence"], errors="coerce")
         df = df.dropna(subset=["Length (cm)", "Confidence"])  # remove invalid rows
         df = df[df["Length (cm)"] > 0]
-        # Haul identifier
-        df["Haul_ID"] = df["Date"].astype(str) + "_" + df["Boat"].astype(str)
+        # Ensure Boat and Species are strings
+        df["Boat"] = df["Boat"].astype(str).fillna("")
+        df["Species"] = df["Species"].astype(str).fillna("")
+        # Haul identifier: use ISO date string + boat
+        df["Haul_ID"] = df["Date"].astype(str) + "_" + df["Boat"]
         return df
 
     # Analytics
@@ -394,118 +373,21 @@ class LengthDistributionReportGenerator:
     # Plots assembled for export (now using Plotly)
     def create_figures(self, df: pd.DataFrame) -> List[object]:
         if px is None or go is None:
-            # Fallback to empty list if Plotly isn't available
             return []
         figs: List[object] = []
-
-        # 1. Overall histogram
-        fig1 = px.histogram(
-            df,
-            x="Length (cm)",
-            nbins=30,
-            marginal="rug",
-            opacity=0.85,
-            color_discrete_sequence=[self._plotly_color_discrete[0]],
-        )
-        fig1.update_layout(title_text="Overall Fish Length Distribution", xaxis_title="Length (cm)", yaxis_title="Frequency")
-        figs.append(fig1)
-
-        # 2. Boxplot by haul
-        if df["Haul_ID"].nunique() > 0:
-            fig2 = px.box(
-                df,
-                x="Haul_ID",
-                y="Length (cm)",
-                color="Haul_ID",
-                color_discrete_sequence=self._plotly_color_discrete,
-            )
-            fig2.update_layout(title_text="Length Distribution by Haul", xaxis_title="Haul ID", yaxis_title="Length (cm)", showlegend=False)
-            figs.append(fig2)
-
-        # 3. Hist by species
-        if df["Species"].nunique() > 1:
-            fig3 = px.histogram(
-                df,
-                x="Length (cm)",
-                color="Species",
-                nbins=20,
-                barmode="overlay",
-                opacity=0.65,
-                color_discrete_sequence=self._plotly_color_discrete,
-            )
-            fig3.update_layout(title_text="Length Distribution by Species", xaxis_title="Length (cm)", yaxis_title="Frequency")
-            figs.append(fig3)
-
-        # 4. Violin by haul
-        if df["Haul_ID"].nunique() > 1:
-            fig4 = px.violin(
-                df,
-                x="Haul_ID",
-                y="Length (cm)",
-                color="Haul_ID",
-                box=True,
-                points=False,
-                color_discrete_sequence=self._plotly_color_discrete,
-            )
-            fig4.update_layout(title_text="Length Distribution Density by Haul", xaxis_title="Haul ID", yaxis_title="Length (cm)", showlegend=False)
-            figs.append(fig4)
-
-        # 5. Bar mean by haul with sd error bars
-        means = df.groupby("Haul_ID")["Length (cm)"].mean().reset_index(name="Mean")
-        stds = df.groupby("Haul_ID")["Length (cm)"].std().reset_index(name="Std")
-        merged = means.merge(stds, on="Haul_ID", how="left").fillna({"Std": 0})
-        fig5 = go.Figure(
-            data=[
-                go.Bar(
-                    x=merged["Haul_ID"],
-                    y=merged["Mean"],
-                    error_y=dict(type='data', array=merged["Std"], visible=True, thickness=1.2),
-                    marker_color=self._plotly_color_discrete,
-                )
-            ]
-        )
-        fig5.update_layout(title_text="Average Fish Length by Haul", xaxis_title="Haul ID", yaxis_title="Average Length (cm)")
-        figs.append(fig5)
-
-        # 6. Species composition pie (donut)
-        species_counts = df["Species"].value_counts()
-        if not species_counts.empty:
-            agg = species_counts.reset_index()
-            agg.columns = ["Species", "Count"]
-            fig6 = px.pie(
-                agg,
-                names="Species",
-                values="Count",
-                color="Species",
-                color_discrete_sequence=self._plotly_color_discrete,
-                hole=0.4,
-            )
-            fig6.update_traces(textposition='inside', textinfo='percent')
-            fig6.update_layout(title_text="Species Composition")
-            figs.append(fig6)
-
-        if not species_counts.empty:
-            agg2 = species_counts.reset_index()
-            agg2.columns = ["Species", "Count"]
-            agg2 = agg2.sort_values("Count", ascending=True)
-            fig7 = px.bar(
-                agg2,
-                x="Count",
-                y="Species",
-                orientation="h",
-                color="Species",
-                color_discrete_sequence=self._plotly_color_discrete,
-                text="Count",
-            )
-            fig7.update_traces(texttemplate="%{x}", textposition="outside", cliponaxis=False)
-            fig7.update_layout(title_text="Total Count by Species", xaxis_title="Count", yaxis_title="Species", showlegend=False)
-            figs.append(fig7)
-
+        # Only include charts that exist in ReportWidget (species_pie, avg_length_bar, count_bar)
+        for key in ("species_pie", "species_avg_length_bar", "species_count_bar"):
+            try:
+                fig = self.create_plotly_chart(df, key)
+                figs.append(fig)
+            except Exception:
+                # Skip any chart that fails to render
+                continue
         return figs
 
     # Orchestration
     def generate_report(self, output_dir: Path, formats: Optional[List[str]] = None) -> Dict:
-        fmts = formats or ["pdf", "excel"]
+        fmts = formats or ["pdf"]
         df = self.load_data()
         if df.empty:
             raise ValueError("No valid data found in the dataset")
@@ -534,7 +416,7 @@ class LengthDistributionReportGenerator:
             exp = self.exporters.get(ft)
             if not exp:
                 continue
-            ext = 'xlsx' if ft == 'excel' else ft
+            ext = ft
             out_path = output_dir / f"length_distribution_report_{stamp}.{ext}"
             exp.export(report_data, out_path)
             exported[ft] = out_path
