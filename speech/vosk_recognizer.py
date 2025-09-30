@@ -8,6 +8,7 @@ from typing import Optional, List, Any
 import numpy as np
 from loguru import logger
 from PyQt6.QtCore import pyqtSignal
+from logger.session_logger import SessionLogger
 
 from .base_recognizer import BaseSpeechRecognizer
 from noise.controller import NoiseController
@@ -280,11 +281,17 @@ class VoskRecognizer(BaseSpeechRecognizer):
             self.partial_text.emit("Ready for fish species...")
             self._emit_status_once("listening")
 
-            segment_generator = self._noise_controller.collect_segments(padding_ms=self.PADDING_MS)
+            segment_generator = self._noise_controller.collect_segments_with_timing(padding_ms=self.PADDING_MS)
 
             while not self.is_stopped():
                 try:
-                    segment = next(segment_generator)
+                    item = next(segment_generator)
+                    if isinstance(item, tuple) and len(item) == 3:
+                        segment, start_ts, end_ts = item
+                    else:
+                        segment = item  # type: ignore
+                        start_ts = end_ts = time.time()
+
                     if segment is None or segment.size == 0:
                         continue
 
@@ -293,6 +300,14 @@ class VoskRecognizer(BaseSpeechRecognizer):
                         continue
 
                     self._emit_status_once("processing")
+
+                    # Log capture timing
+                    try:
+                        SessionLogger.get().log_segment_timing(
+                            float(start_ts), float(end_ts), int(segment.size), self.SAMPLE_RATE, note="captured"
+                        )
+                    except Exception:
+                        pass
 
                     # Simple Vosk processing
                     try:
@@ -318,6 +333,12 @@ class VoskRecognizer(BaseSpeechRecognizer):
                         continue
 
                     logger.info(f"Recognized: '{text_out}'")
+                    try:
+                        SessionLogger.get().log(
+                            f"TRANSCRIPT: '{text_out}' audio_s={segment_duration:.3f}"
+                        )
+                    except Exception:
+                        pass
 
                     # Handle commands
                     text_lower = text_out.lower()

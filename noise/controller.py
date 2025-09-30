@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Generator
 import queue
 import numpy as np
+import time
 
 from .suppressor import AdaptiveNoiseSuppressor, SuppressorConfig
 
@@ -146,3 +147,64 @@ class NoiseController:
                         voiced = False
                         yield segment
 
+    def collect_segments_with_timing(self, padding_ms: int = 800):
+        """Yield (segment, start_ts, end_ts) where timestamps are wall-clock seconds.
+
+        start_ts is recorded on the first frame classified as speech; end_ts
+        is recorded at the moment the segment is closed (padding exceeded or
+        max_segment_s reached). Timestamps are from time.time().
+        """
+        frame_ms = 30
+        frame_size = int(self.sample_rate * frame_ms / 1000)
+
+        voiced = False
+        voiced_frames: list[np.ndarray] = []
+        silence_frames = 0
+        buf = np.array([], dtype=np.int16)
+        start_ts: float | None = None
+
+        while True:
+            try:
+                data = self._audio_queue.get()
+            except Exception:
+                break
+            if data.size == 0:
+                # End-of-stream sentinel
+                break
+
+            buf = np.concatenate((buf, data)) if buf.size else data
+            while buf.size >= frame_size:
+                frame = buf[:frame_size]
+                buf = buf[frame_size:]
+
+                frame_hp = self._highpass_filter(frame)
+                is_speech = self.vad.is_speech(frame_hp.tobytes(), self.sample_rate)
+                frame_dn = self._suppressor.enhance_frame(frame_hp, is_speech=is_speech)
+
+                if is_speech:
+                    if not voiced:
+                        start_ts = time.time()
+                    voiced_frames.append(frame_dn)
+                    silence_frames = 0
+                    voiced = True
+                else:
+                    if voiced:
+                        silence_frames += 1
+                        if (silence_frames * frame_ms) > padding_ms:
+                            segment = np.concatenate(voiced_frames) if voiced_frames else np.array([], dtype=np.int16)
+                            voiced_frames = []
+                            voiced = False
+                            end_ts = time.time()
+                            if segment.size / self.sample_rate >= self.min_speech_s:
+                                yield segment, (start_ts or end_ts), end_ts
+                            start_ts = None
+
+                if voiced and voiced_frames:
+                    total_samples = sum(len(f) for f in voiced_frames)
+                    if total_samples / self.sample_rate >= self.max_segment_s:
+                        segment = np.concatenate(voiced_frames)
+                        voiced_frames = []
+                        voiced = False
+                        end_ts = time.time()
+                        yield segment, (start_ts or end_ts), end_ts
+                        start_ts = None

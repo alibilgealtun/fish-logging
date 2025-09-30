@@ -9,6 +9,7 @@ import soundfile as sf
 from PyQt6.QtCore import pyqtSignal
 from noise.controller import NoiseController
 import json
+from logger.session_logger import SessionLogger
 
 
 class GoogleSpeechRecognizer(BaseSpeechRecognizer):
@@ -403,13 +404,18 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
             self.partial_text.emit("Listening…")
             self._emit_status_once("listening")
 
-            segment_generator = self._noise_controller.collect_segments(
+            segment_generator = self._noise_controller.collect_segments_with_timing(
                 padding_ms=self.PADDING_MS
             )
 
             while not self.is_stopped():
                 try:
-                    segment = next(segment_generator)
+                    item = next(segment_generator)
+                    if isinstance(item, tuple) and len(item) == 3:
+                        segment, start_ts, end_ts = item
+                    else:
+                        segment = item  # type: ignore
+                        start_ts = end_ts = None
                     if segment is None or segment.size == 0:
                         continue
 
@@ -418,6 +424,15 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                         continue
 
                     self._emit_status_once("processing")
+
+                    # Log capture timing (if timestamps available)
+                    try:
+                        if start_ts is not None and end_ts is not None:
+                            SessionLogger.get().log_segment_timing(
+                                float(start_ts), float(end_ts), int(segment.size), self.SAMPLE_RATE, note="captured"
+                            )
+                    except Exception:
+                        pass
 
                     # Prepend number prefix and send raw PCM to Google
                     #combined = np.concatenate((self._number_sound, segment)).astype(np.int16)
@@ -446,6 +461,12 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                         continue
 
                     logger.info(f"Raw transcription: {text_out}")
+                    try:
+                        SessionLogger.get().log(
+                            f"TRANSCRIPT: '{text_out}' audio_s={(segment.size / self.SAMPLE_RATE):.3f}"
+                        )
+                    except Exception:
+                        pass
 
                     # Handle control commands
                     text_lower = text_out.lower()

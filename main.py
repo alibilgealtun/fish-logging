@@ -17,6 +17,8 @@ try:
 except Exception:
     GoogleSpeechRecognizer = None  # type: ignore
 
+from logger.session_logger import SessionLogger
+
 
 def main() -> None:
     try:
@@ -24,7 +26,27 @@ def main() -> None:
     except Exception:
         pass
     logger.add(sys.stderr, level="INFO")
+
+    # Initialize process-wide session logger once, at app start
+    session = SessionLogger.get()
+
+    # Capture uncaught exceptions into the session log
+    def _excepthook(exc_type, exc_value, exc_traceback):
+        try:
+            logger.error("Uncaught exception:")
+            import traceback
+            tb = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+            session.log(tb)
+        finally:
+            # Delegate to default hook as well
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+    sys.excepthook = _excepthook
+
     app = QApplication(sys.argv)
+
+    # Ensure we close the session cleanly when the Qt app is quitting
+    app.aboutToQuit.connect(lambda: SessionLogger.get().log_end())
 
     xlogger = ExcelLogger()
     # Choose engine via CLI arg --engine=whisper|vosk|google or env SPEECH_ENGINE
@@ -39,6 +61,19 @@ def main() -> None:
     except Exception as e:
         logger.error(str(e))
         recognizer = create_recognizer("whisper", numbers_only=False)
+
+    # Log session configuration once
+    try:
+        session.log_kv("APP", {
+            "engine": engine,
+            "numbers_only": numbers_only,
+            "python": sys.version.split(" ")[0],
+        })
+        # If recognizer exposes config, log it
+        if hasattr(recognizer, "get_config"):
+            session.log_kv("CONFIG", getattr(recognizer, "get_config")())
+    except Exception:
+        pass
 
     win = MainWindow(recognizer, xlogger)
     win.show()

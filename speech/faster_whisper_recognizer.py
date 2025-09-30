@@ -13,6 +13,7 @@ from .base_recognizer import BaseSpeechRecognizer
 from noise.controller import NoiseController
 from parser import ParserResult
 import soundfile as sf
+from logger.session_logger import SessionLogger
 
 
 @dataclass
@@ -136,11 +137,7 @@ class WhisperRecognizer(BaseSpeechRecognizer):
             max_segment_s=self.MAX_SEGMENT_S
         )
 
-        from logger.session_logger import SessionLogger
-        self._session_logger = SessionLogger()
-        self._session_logger.log_start(self.get_config())
-        import loguru
-        self._session_log_sink_id = loguru.logger.add(self._session_logger.log_path, format="[{time:YYYY-MM-DD HH:mm:ss}] {level}: {message}", level="INFO")
+        # Session logging is process-wide; nothing to initialize here.
 
         if not self.isRunning():
             try:
@@ -239,8 +236,6 @@ class WhisperRecognizer(BaseSpeechRecognizer):
             msg = f"Failed to load Whisper model: {e}"
             logger.error(msg)
             self.error.emit(msg)
-            if hasattr(self, '_session_logger'):
-                self._session_logger.log(f"ERROR: {e}")
             return
 
         try:
@@ -266,14 +261,20 @@ class WhisperRecognizer(BaseSpeechRecognizer):
             self._emit_status_once("listening")
 
             # Use noise controller's segment collector
-            segment_generator = self._noise_controller.collect_segments(
+            segment_generator = self._noise_controller.collect_segments_with_timing(
                 padding_ms=self.PADDING_MS
             )
 
             while not self.is_stopped():
                 try:
                     # Get filtered and VAD-processed segment
-                    segment = next(segment_generator)
+                    item = next(segment_generator)
+                    # Support both old and new generator (for safety)
+                    if isinstance(item, tuple) and len(item) == 3:
+                        segment, start_ts, end_ts = item
+                    else:
+                        segment = item  # type: ignore
+                        start_ts = end_ts = time.time()
 
                     if segment is None or segment.size == 0:
                         continue
@@ -285,6 +286,14 @@ class WhisperRecognizer(BaseSpeechRecognizer):
 
                     # Update status
                     self._emit_status_once("processing")
+
+                    # Log capture timing
+                    try:
+                        SessionLogger.get().log_segment_timing(
+                            float(start_ts), float(end_ts), int(segment.size), self.SAMPLE_RATE, note="captured"
+                        )
+                    except Exception:
+                        pass
 
                     # COMBINE NUMBER SOUND WITH SEGMENT!!! IMPORTANT PART
                     combined_segment = np.concatenate((self._number_sound, segment))
@@ -328,6 +337,12 @@ class WhisperRecognizer(BaseSpeechRecognizer):
                         continue
 
                     logger.info(f"Raw transcription: {text_out}")
+                    try:
+                        SessionLogger.get().log(
+                            f"TRANSCRIPT: '{text_out}' audio_s={segment_duration:.3f}"
+                        )
+                    except Exception:
+                        pass
 
                     # --- Check for pause/resume commands ---
                     text_lower = text_out.lower()
@@ -412,8 +427,3 @@ class WhisperRecognizer(BaseSpeechRecognizer):
         # On exit
         self._emit_status_once("stopped")
         logger.info("Speech recognizer stopped")
-        if hasattr(self, '_session_logger'):
-            self._session_logger.log_end()
-        if hasattr(self, '_session_log_sink_id'):
-            import loguru
-            loguru.logger.remove(self._session_log_sink_id)
