@@ -7,6 +7,7 @@ from .PulsingStatusIndicator import PulsingStatusIndicator
 from .BoatNameInput import BoatNameInput
 from .SpeciesSelector import SpeciesSelector
 from .StationIdInput import StationIdInput
+from .SettingsWidget import SettingsWidget
 
 __all__ = [
     'AnimatedButton',
@@ -18,4 +19,5 @@ __all__ = [
     'BoatNameInput',
     'SpeciesSelector',
     'StationIdInput',
+    'SettingsWidget',
 ]

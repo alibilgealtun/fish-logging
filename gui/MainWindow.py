@@ -13,10 +13,18 @@ from PyQt6.QtWidgets import (
     QWidget, QPushButton, QLabel, QGraphicsBlurEffect, QHeaderView,
     QTabWidget, QStyle,
 )
-from loguru import logger
+# Optional logger: prefer loguru if available, else fallback to stdlib logging
+try:  # pragma: no cover
+    from loguru import logger  # type: ignore
+except Exception:  # pragma: no cover
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger("main_window")
 from parser import FishParser
 from .widgets import *
 from .widgets.ReportWidget import ReportWidget
+from .widgets.SettingsWidget import SettingsWidget
 
 
 class MainWindow(QMainWindow):
@@ -110,14 +118,19 @@ class MainWindow(QMainWindow):
 
         # Build main logging tab content
         logging_tab = self._create_main_tab()
+        self.logging_tab = logging_tab
 
         # Reports tab
         self.report_widget = ReportWidget()
+
+        # Settings tab
+        self.settings_widget = SettingsWidget()
 
         # Tabs container
         self.tabs = QTabWidget()
         self.tabs.addTab(logging_tab, "🎣 Fish Logging")
         self.tabs.addTab(self.report_widget, "📊 Reports")
+        self.tabs.addTab(self.settings_widget, "⚙️ Settings")
         # Start/stop recognizer when switching tabs
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -143,17 +156,19 @@ class MainWindow(QMainWindow):
         self.btn_start.clicked.connect(self._on_start)
 
     def _on_tab_changed(self, index: int) -> None:
-        """Pause recognizer in Reports, resume in Fish Logging; render default chart in Reports."""
+        """Pause recognizer on non-logging tabs; render default chart in Reports."""
         try:
-            if self.tabs.widget(index) is self.report_widget:
-                # Entering Reports -> stop listening and show first chart
-                self._on_stop()
-                # Render a default chart once
-                if hasattr(self.report_widget, "show_default_chart"):
-                    self.report_widget.show_default_chart()
-            else:
+            widget = self.tabs.widget(index)
+            if widget is self.logging_tab:
                 # Returning to Fish Logging -> start listening
                 self._on_start()
+            else:
+                # Entering non-logging tabs -> stop listening
+                self._on_stop()
+                if widget is self.report_widget:
+                    # Render a default chart once
+                    if hasattr(self.report_widget, "show_default_chart"):
+                        self.report_widget.show_default_chart()
         except Exception as e:
             logger.error(f"Tab change handler failed: {e}")
 
