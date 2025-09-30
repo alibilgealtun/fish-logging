@@ -284,3 +284,4 @@ google.json
 tests/data/numbers.json
 tmp_sepformer/hyperparams.yaml
 /tmp_sepformer
+config/google_sheets.json
