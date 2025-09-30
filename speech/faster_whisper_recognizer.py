@@ -55,6 +55,12 @@ class WhisperRecognizer(BaseSpeechRecognizer):
     DEVICE: str = "cpu"
     COMPUTE_TYPE: str = "int8"
 
+    # Noise controller settings - optimized for engine noise + background speech
+    VAD_MODE: int = 2  # More aggressive VAD for noisy environments
+    MIN_SPEECH_S: float = 0.4
+    MAX_SEGMENT_S: float = 3.0
+    PADDING_MS: int = 600
+
     # === Decoding parameters ===
     BEAM_SIZE: int = 3
     BEST_OF: int = 5
