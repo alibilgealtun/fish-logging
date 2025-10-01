@@ -8,8 +8,10 @@ from .config import ConfigManager
 class TextNormalizer:
     """Handles text normalization and ASR corrections."""
 
-    def __init__(self, config: ConfigManager = ConfigManager("config/")) -> None:
+    def __init__(self, config: ConfigManager = None) -> None:
         """Initialize text normalizer with configuration."""
+        if config is None:
+            config = ConfigManager()
         self.config = config
         self._compile_correction_patterns()
 

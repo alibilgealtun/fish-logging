@@ -28,9 +28,11 @@ class ParserResult:
 class FishParser:
     """Main parser for fish species and measurements from ASR text."""
 
-    def __init__(self, config_path: str = "config/"):
+    def __init__(self, config: ConfigManager = None):
         """Initialize parser with configuration."""
-        self.config = ConfigManager(config_path)
+        if config is None:
+            config = ConfigManager()
+        self.config = config
         self.species_matcher = SpeciesMatcher(self.config)
         self.number_parser = NumberParser(self.config)
         self.text_normalizer = TextNormalizer(self.config)
@@ -79,4 +81,3 @@ class FishParser:
             return ParserResult(cancel=False, species=species, length_cm=float(length_val))
 
         return ParserResult(cancel=False, species=species, length_cm=length_val)
-
