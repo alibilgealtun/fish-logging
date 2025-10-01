@@ -261,25 +261,29 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
     def _build_phrase_hints(self, numbers_only: bool = False) -> List[str]:
         """Collect hints. If numbers_only, restrict to numbers/units and a few control words."""
         hints: List[str] = []
+        
+        # Get data from centralized config if available
         try:
-            import json as _json
-            with open(os.path.join("config", "numbers.json"), "r", encoding="utf-8") as f:
-                numbers_cfg = _json.load(f)
+            from config.config import ConfigLoader
+            loader = ConfigLoader()
+            config, _ = loader.load([])
+            
+            numbers_cfg = config.numbers_data
+            units_cfg = config.units_data
+            species_cfg = config.species_data
+            
             number_words = list(numbers_cfg.get("number_words", {}).keys())
+            unit_words = list(units_cfg.get("synonyms", {}).keys())
         except Exception:
+            # Fallback to hardcoded values
             number_words = [
                 "zero","one","two","three","four","five","six","seven","eight","nine",
                 "ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen",
                 "eighteen","nineteen","twenty","thirty","forty","fifty","sixty","seventy",
                 "eighty","ninety","hundred","point","dot","comma"
             ]
-        try:
-            import json as _json
-            with open(os.path.join("config", "units.json"), "r", encoding="utf-8") as f:
-                units_cfg = _json.load(f)
-            unit_words = list(units_cfg.get("synonyms", {}).keys())
-        except Exception:
             unit_words = ["cm","centimeter","centimeters","mm","millimeter","millimeters"]
+            species_cfg = {}
 
         if numbers_only:
             hints.extend(number_words)
@@ -289,9 +293,6 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
         else:
             # Include species as well for general mode
             try:
-                import json as _json
-                with open(os.path.join("config", "species.json"), "r", encoding="utf-8") as f:
-                    species_cfg = _json.load(f)
                 for item in species_cfg.get("items", []):
                     name = item.get("name")
                     if name:

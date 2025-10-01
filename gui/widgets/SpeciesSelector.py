@@ -148,10 +148,12 @@ class SpeciesSelector(QComboBox):
             self.setCurrentIndex(idx.row())
 
     def _load_species_data(self) -> Dict:
-        cfg_path = Path("config/species.json")
         try:
-            with cfg_path.open("r", encoding="utf-8") as f:
-                return json.load(f)
+            # Get data from centralized config
+            from config.config import ConfigLoader
+            loader = ConfigLoader()
+            config, _ = loader.load([])
+            return config.species_data
         except Exception:
             return {"items": [], "normalization": {}, "species": []}
 

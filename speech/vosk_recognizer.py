@@ -91,15 +91,14 @@ class VoskRecognizer(BaseSpeechRecognizer):
     def _create_simple_word_list(self) -> List[str]:
         """Create a simple, effective word list for fish recognition."""
         try:
-            config_dir = os.path.join(self._BASE_DIR, "config")
-
-            # Load configs
-            with open(os.path.join(config_dir, "species.json"), "r", encoding="utf-8") as f:
-                species_cfg = json.load(f)
-            with open(os.path.join(config_dir, "numbers.json"), "r", encoding="utf-8") as f:
-                numbers_cfg = json.load(f)
-            with open(os.path.join(config_dir, "units.json"), "r", encoding="utf-8") as f:
-                units_cfg = json.load(f)
+            # Get data from centralized config
+            from config.config import ConfigLoader
+            loader = ConfigLoader()
+            config, _ = loader.load([])
+            
+            species_cfg = config.species_data
+            numbers_cfg = config.numbers_data
+            units_cfg = config.units_data
 
             words = set()
 

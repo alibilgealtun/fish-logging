@@ -54,8 +54,14 @@ class GoogleSheetsBackup:
         svc.backup_excel_to_sheet(Path("logs/hauls/logs.xlsx"))
     """
 
-    def __init__(self, config_path: Optional[Path] = None) -> None:
-        self.config_path = Path(config_path) if config_path else Path("config/google_sheets.json")
+    def __init__(self, config_path: Optional[Path] = None, app_config=None) -> None:
+        if config_path:
+            self.config_path = Path(config_path)
+        elif app_config and hasattr(app_config, 'google_sheets_config'):
+            # Use centralized config if available
+            self.config_path = Path("config/google_sheets.json")  # Keep same path for backward compatibility
+        else:
+            self.config_path = Path("config/google_sheets.json")
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Configuration management
