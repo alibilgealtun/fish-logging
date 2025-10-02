@@ -68,17 +68,17 @@ class ConfigLoader:
         # 1. Start with defaults
         config_dict = self._get_defaults()
 
-        # 2. Load from JSON files
+        # 2. Load from JSON files (deep merge)
         json_data = self._load_json_configs()
-        config_dict.update(json_data)
+        self._deep_update(config_dict, json_data)
 
-        # 3. Override with environment variables
+        # 3. Override with environment variables (deep merge)
         env_overrides = self._load_env_overrides()
-        config_dict.update(env_overrides)
+        self._deep_update(config_dict, env_overrides)
 
-        # 4. Parse CLI arguments (highest priority)
+        # 4. Parse CLI arguments (highest priority, deep merge)
         cli_overrides, unknown_args = self._parse_cli_args(argv)
-        config_dict.update(cli_overrides)
+        self._deep_update(config_dict, cli_overrides)
 
         # 5. Build and validate final config
         config = self._build_config(config_dict)
@@ -134,19 +134,25 @@ class ConfigLoader:
 
     def _load_env_overrides(self) -> Dict[str, Any]:
         """Load configuration overrides from environment variables."""
-        overrides = {}
+        overrides: Dict[str, Any] = {}
 
         # Speech configuration
         speech_engine = os.getenv("SPEECH_ENGINE")
         if speech_engine:
-            overrides.setdefault("speech", {})["engine"] = speech_engine
+            speech_overrides = overrides.setdefault("speech", {})
+            if isinstance(speech_overrides, dict):
+                speech_overrides["engine"] = speech_engine
 
         if self._env_bool("SPEECH_NUMBERS_ONLY"):
-            overrides.setdefault("speech", {})["numbers_only"] = True
+            speech_overrides = overrides.setdefault("speech", {})
+            if isinstance(speech_overrides, dict):
+                speech_overrides["numbers_only"] = True
 
         speech_language = os.getenv("SPEECH_LANGUAGE")
         if speech_language:
-            overrides.setdefault("speech", {})["language"] = speech_language
+            speech_overrides = overrides.setdefault("speech", {})
+            if isinstance(speech_overrides, dict):
+                speech_overrides["language"] = speech_language
 
         # Debug and logging
         if self._env_bool("DEBUG"):
@@ -185,11 +191,15 @@ class ConfigLoader:
 
         known, unknown = parser.parse_known_args(argv)
 
-        overrides = {}
+        overrides: Dict[str, Any] = {}
         if known.engine:
-            overrides.setdefault("speech", {})["engine"] = known.engine
+            speech_overrides = overrides.setdefault("speech", {})
+            if isinstance(speech_overrides, dict):
+                speech_overrides["engine"] = known.engine
         if known.numbers_only:
-            overrides.setdefault("speech", {})["numbers_only"] = True
+            speech_overrides = overrides.setdefault("speech", {})
+            if isinstance(speech_overrides, dict):
+                speech_overrides["numbers_only"] = True
         if known.debug:
             overrides["debug"] = True
         if known.log_level:
@@ -225,6 +235,20 @@ class ConfigLoader:
         if val is None:
             return default
         return val.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    @staticmethod
+    def _deep_update(target: Dict[str, Any], updates: Dict[str, Any]) -> None:
+        """Recursively update mapping 'target' with 'updates' without clobbering nested dicts.
+
+        - Only keys present in updates are applied.
+        - For dict values, merge recursively.
+        - For non-dict values, assign directly.
+        """
+        for key, new_val in updates.items():
+            if isinstance(new_val, dict) and isinstance(target.get(key), dict):
+                ConfigLoader._deep_update(target[key], new_val)  # type: ignore[index]
+            else:
+                target[key] = new_val
 
 
 def parse_app_args(argv: List[str]) -> Tuple[AppConfig, List[str]]:

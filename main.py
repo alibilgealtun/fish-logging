@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.startup import run_application
+from speech.factory import create_recognizer
 
 
 def main() -> None:
@@ -11,6 +12,8 @@ def main() -> None:
 
     run_application()
 
+
+__all__ = ["main", "create_recognizer"]
 
 if __name__ == "__main__":
     main()
