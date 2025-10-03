@@ -277,7 +277,7 @@ logs.xlsx
 /tests/audio
 /tests/results
 *.m4a
-organize_audio_files.py
+scripts/organize_audio_files.py
 *.wav
 /reports/output
 google.json
@@ -285,3 +285,4 @@ tests/data/numbers.json
 tmp_sepformer/hyperparams.yaml
 /tmp_sepformer
 config/google_sheets.json
+/.serena
