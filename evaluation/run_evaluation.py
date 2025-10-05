@@ -62,7 +62,16 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     p.add_argument("--max-samples", type=int, help="Limit number of samples for quick test")
     p.add_argument("--output-dir", default=os.environ.get("EVAL_OUTPUT_DIR", "evaluation_outputs"))
     p.add_argument("--plots", action="store_true", help="Generate basic plots")
+    p.add_argument("--preset", help="Named preset (quick, full) located in evaluation/presets")
+    p.add_argument("--production-replay", action="store_true", help="Replay audio through production NoiseController segmentation (closer to main.py)")
     return p.parse_args(argv)
+
+
+def _load_preset(name: str) -> Dict[str, Any]:
+    preset_path = Path(__file__).parent / "presets" / f"{name}.json"
+    if not preset_path.exists():
+        raise FileNotFoundError(f"Preset not found: {preset_path}")
+    return json.loads(preset_path.read_text(encoding="utf-8"))
 
 
 def _defaults_if_missing(ns: argparse.Namespace) -> None:
@@ -143,6 +152,7 @@ def _generate_configs(ns: argparse.Namespace):
         concat_number=ns.concat_number,
         number_audio_path=ns.number_audio,
         audio_root=ns.audio_root,
+        production_replay=ns.production_replay,
     )
 
 
@@ -184,6 +194,19 @@ def main(argv: List[str] | None = None):
     logger.info("Resolved configuration:")
     logger.info(f" models={ns.models} sizes={ns.sizes} beams={ns.beams} chunks={ns.chunks}")
     logger.info(f" dataset_json={ns.dataset_json} audio_root={ns.audio_root} concat_number={ns.concat_number}")
+    logger.info(f" production_replay={ns.production_replay}")
+
+    if ns.preset:
+        try:
+            preset_cfg = _load_preset(ns.preset)
+            # Only fill missing cli args / grid-injected values
+            for k, v in preset_cfg.items():
+                if getattr(ns, k, None) in (None, [], False):
+                    setattr(ns, k, v)
+        except Exception as e:
+            logger.error(f"Failed loading preset '{ns.preset}': {e}")
+
+    logger.info(f" preset={ns.preset} grid={ns.grid}")
 
     configs = _generate_configs(ns)
     if not configs:

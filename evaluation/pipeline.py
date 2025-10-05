@@ -44,6 +44,9 @@ from .metrics import (
     compute_percentiles,
 )
 from parser import FishParser  # type: ignore
+from parser.text_normalizer import TextNormalizer  # type: ignore
+from speech.factory import create_recognizer  # type: ignore
+from speech.base_recognizer import BaseSpeechRecognizer  # type: ignore
 
 # Optional GPU monitoring
 try:  # pragma: no cover - environment specific
@@ -129,9 +132,9 @@ def _format_exception(ex: Exception) -> str:
 
 # ---------------------- Dataset Handling ----------------------
 class DatasetSample:
-    __slots__ = ("audio_path", "expected_number", "duration", "meta", "speaker_id", "accent", "gender", "age", "recording_device", "noise_type", "snr_db", "raw_entry")
+    __slots__ = ("audio_path", "expected_number", "duration", "meta", "speaker_id", "accent", "gender", "age", "recording_device", "noise_type", "snr_db", "raw_entry", "source")
     def __init__(self, audio_path: Path, expected_number: Optional[float], duration: float, meta: Dict[str, Any],
-                 speaker_id: str, accent: str, gender: str, age: str, recording_device: str, noise_type: str, snr_db: Optional[float], raw_entry: Dict[str, Any] | None = None):
+                 speaker_id: str, accent: str, gender: str, age: str, recording_device: str, noise_type: str, snr_db: Optional[float], raw_entry: Dict[str, Any] | None = None, source: str = "metadata"):
         self.audio_path = audio_path
         self.expected_number = expected_number
         self.duration = duration
@@ -144,6 +147,7 @@ class DatasetSample:
         self.noise_type = noise_type
         self.snr_db = snr_db
         self.raw_entry = raw_entry or {}
+        self.source = source
 
 
 def discover_dataset(root: Path) -> List[DatasetSample]:
@@ -179,7 +183,7 @@ def discover_dataset(root: Path) -> List[DatasetSample]:
             try:
                 samples.append(
                     DatasetSample(audio_path, float(expected) if expected is not None else None, dur, meta,
-                                  speaker_id, accent, gender, age, recording_device, noise_type, snr_db)
+                                  speaker_id, accent, gender, age, recording_device, noise_type, snr_db, source="metadata")
                 )
             except Exception:
                 continue
@@ -215,6 +219,7 @@ def discover_dataset(root: Path) -> List[DatasetSample]:
                         recording_device="unk",
                         noise_type="clean",
                         snr_db=None,
+                        source="filename_fallback",
                     )
                 )
             except Exception:
@@ -266,6 +271,7 @@ def _load_json_dataset(json_path: Path, audio_root: Path | None) -> List[Dataset
                     noise_type="clean",
                     snr_db=None,
                     raw_entry=entry,
+                    source="json",
                 )
             )
         except Exception:
@@ -421,14 +427,445 @@ class ASREvaluator:
         rows: List[Dict[str, Any]] = []
 
         for cfg in configs:
-            model = self._get_model(cfg)
-            simulator = StreamingSimulator(chunk_ms=cfg.inference_config.chunk_size_ms, real_time=self.real_time)
-            number_prefix, _ = _maybe_load_number_prefix(cfg)
+            model = None if cfg.production_replay else self._get_model(cfg)
+            simulator = None if cfg.production_replay else StreamingSimulator(chunk_ms=cfg.inference_config.chunk_size_ms, real_time=self.real_time)
+            number_prefix, _ = (None, 0) if cfg.production_replay else _maybe_load_number_prefix(cfg)
             samples = self._get_dataset_samples(cfg)
             if max_samples is not None and samples:
                 samples = samples[:max_samples]
-            logger.info(f"Evaluating config {cfg.test_run_id} on {len(samples)} samples (json_mode={bool(cfg.dataset_json)})")
+            logger.info(f"Evaluating config {cfg.test_run_id} on {len(samples)} samples (json_mode={bool(cfg.dataset_json)}) prod_replay={cfg.production_replay}")
 
+            # Production replay branch
+            if cfg.production_replay:
+                # Map model name to factory engine
+                engine_map = {"faster-whisper": "whisper", "whisperx": "whisperx"}
+                engine = engine_map.get(cfg.model.name.lower(), cfg.model.name.lower())
+                try:
+                    recognizer = create_recognizer(engine)
+                except Exception as e:
+                    logger.error(f"Failed to create recognizer for engine={engine}: {e}")
+                    continue
+                # Override basic decoding params (non-invasive)
+                try:
+                    if hasattr(recognizer, 'MODEL_NAME'):
+                        recognizer.MODEL_NAME = cfg.model.size
+                    if hasattr(recognizer, 'DEVICE'):
+                        recognizer.DEVICE = cfg.model.device
+                    if hasattr(recognizer, 'COMPUTE_TYPE'):
+                        recognizer.COMPUTE_TYPE = cfg.model.compute_type
+                    if hasattr(recognizer, 'BEAM_SIZE'):
+                        recognizer.BEAM_SIZE = cfg.inference_config.beam_size
+                except Exception:
+                    pass
+                # Force model load
+                try:
+                    recognizer._load_backend_model()  # type: ignore
+                    recognizer._backend_post_init()  # type: ignore
+                except Exception as e:
+                    logger.error(f"Recognizer backend load failed: {e}")
+                    continue
+
+                from noise.controller import NoiseController  # local import
+
+                for sample in tqdm(samples, desc=f"{cfg.model.name}-{cfg.model.size}"):
+                    try:
+                        audio, sr = _load_audio(sample.audio_path)
+                    except Exception as e:
+                        rows.append({
+                            "test_run_id": cfg.test_run_id,
+                            "wav_id": sample.audio_path.name,
+                            "error": _format_exception(e),
+                            "model_name": cfg.model.name,
+                            "model_size": cfg.model.size,
+                            "config_json": cfg.to_json(),
+                            "speaker_id": sample.speaker_id,
+                            "accent": sample.accent,
+                            "gender": sample.gender,
+                            "age": sample.age,
+                            "recording_device": sample.recording_device,
+                            "noise_type": sample.noise_type,
+                            "snr_db": sample.snr_db,
+                        })
+                        continue
+
+                    # Build production-like NoiseController
+                    nc = NoiseController(sample_rate=recognizer.SAMPLE_RATE, vad_mode=recognizer.VAD_MODE,
+                                         min_speech_s=recognizer.MIN_SPEECH_S, max_segment_s=recognizer.MAX_SEGMENT_S)
+                    # Convert audio to int16 stream chunks matching recognizer._chunk_frames
+                    chunk_frames = int(recognizer.SAMPLE_RATE * recognizer.CHUNK_S)
+                    if sr != recognizer.SAMPLE_RATE:
+                        # simple resample
+                        if resample is None:
+                            logger.error("scipy required for resample in production_replay")
+                            continue
+                        audio = resample(audio, int(len(audio) * recognizer.SAMPLE_RATE / sr))
+                        sr = recognizer.SAMPLE_RATE
+                    pcm16_full = (audio * 32767).astype(np.int16)
+                    start_feed_time = time.time()
+                    fed = 0
+                    while fed < pcm16_full.size:
+                        end = min(fed + chunk_frames, pcm16_full.size)
+                        chunk = pcm16_full[fed:end]
+                        nc.push_audio(chunk)
+                        fed = end
+                        if self.real_time:
+                            time.sleep(len(chunk)/recognizer.SAMPLE_RATE)
+                    nc.stop()
+
+                    segment_list = []
+                    try:
+                        for seg_arr, seg_start, seg_end in nc.collect_segments_with_timing(padding_ms=recognizer.PADDING_MS):
+                            segment_list.append((seg_arr, seg_start, seg_end))
+                    except Exception as e:
+                        logger.debug(f"Segment collection error: {e}")
+
+                    if not segment_list:
+                        logger.debug(f"No segments for {sample.audio_path.name}; fallback single-pass decode")
+                        # Fallback: direct full decode with existing model via recognizer backend
+                        seg_audio = pcm16_full
+                        seg_float = seg_audio.astype(np.float32) / 32767.0
+                        combined = np.concatenate((getattr(recognizer, '_number_sound', np.zeros(0, dtype=np.int16)), seg_audio))
+                        wav_path = BaseSpeechRecognizer._write_wav_bytes(combined, recognizer.SAMPLE_RATE)  # type: ignore
+                        decode_start = time.time()
+                        try:
+                            segments = recognizer._backend_transcribe(segment=combined, wav_path=wav_path)  # type: ignore
+                        except Exception as e:
+                            logger.error(f"Transcribe failed: {e}")
+                            segments = []
+                        decode_end = time.time()
+                        try:
+                            os.remove(wav_path)
+                        except Exception:
+                            pass
+                        raw_text = " ".join((s.text for s in segments)).strip()
+                        # Production-like parsing (as in BaseSpeechRecognizer)
+                        final_display = raw_text
+                        parser_species = None
+                        parser_length_cm = None
+                        try:
+                            tn = TextNormalizer()
+                            corrected = tn.apply_fish_asr_corrections(raw_text)
+                            parsed = self.fish_parser.parse_text(corrected)
+                            parser_species = getattr(parsed, 'species', None)
+                            parser_length_cm = getattr(parsed, 'length_cm', None)
+                            if parser_length_cm is not None:
+                                val = float(parser_length_cm)
+                                num_str = (f"{val:.1f}").rstrip("0").rstrip(".")
+                                final_display = f"{parser_species} {num_str} cm" if parser_species else f"{num_str} cm"
+                            else:
+                                final_display = corrected
+                        except Exception:
+                            pass
+                        norm = self.normalizer.normalize(raw_text)
+                        expected_number = sample.expected_number
+                        predicted_number = norm.predicted_number
+                        expected_text = "" if expected_number is None else str(expected_number)
+                        wer = word_error_rate(norm.normalized_text, expected_text)
+                        cer = char_error_rate(norm.normalized_text, expected_text)
+                        der = digit_error_rate(predicted_number, expected_number)
+                        nem = numeric_exact_match(predicted_number, expected_number)
+                        error_type = self.normalizer.classify_error(predicted_number, expected_number, raw_text, expected_text)
+                        absolute_error = None if (predicted_number is None or expected_number is None) else abs(predicted_number - expected_number)
+                        rows.append({
+                            "test_run_id": cfg.test_run_id,
+                            "wav_id": sample.audio_path.name,
+                            "recognized_text_raw": raw_text,
+                            "recognized_text_normalized": norm.normalized_text,
+                            "predicted_number": predicted_number,
+                            "expected_number": expected_number,
+                            "speaker_id": sample.speaker_id,
+                            "gender": sample.gender,
+                            "age": sample.age,
+                            "accent": sample.accent,
+                            "recording_device": sample.recording_device,
+                            "noise_type": sample.noise_type,
+                            "snr_db": sample.snr_db,
+                            "duration_s": len(pcm16_full)/recognizer.SAMPLE_RATE,
+                            "model_name": cfg.model.name,
+                            "model_size": cfg.model.size,
+                            "config_json": cfg.to_json(),
+                            "vad_setting": cfg.vad_mode,
+                            "processing_time_s": decode_end - decode_start,
+                            "RTF": (decode_end - decode_start) / (len(pcm16_full)/recognizer.SAMPLE_RATE),
+                            "latency_ms": (decode_end - start_feed_time)*1000.0,
+                            "cpu_percent": psutil.cpu_percent(interval=0.0),
+                            "gpu_percent": None,
+                            "memory_mb": psutil.Process(os.getpid()).memory_info().rss/(1024**2),
+                            "gpu_memory_mb": None,
+                            "numeric_exact_match": nem,
+                            "parser_species": parser_species,
+                            "parser_length_cm": parser_length_cm,
+                            "parser_exact_match": 1 if (parser_length_cm is not None and expected_number is not None and float(parser_length_cm)==float(expected_number)) else None,
+                            "final_display_text": final_display,
+                            "WER": wer,
+                            "CER": cer,
+                            "DER": der,
+                            "absolute_error": absolute_error,
+                            "error_type": error_type,
+                            "notes": "fallback_full_decode",
+                            "sample_source": sample.source,
+                            "used_prefix": 1,
+                            "number_range": "unknown" if expected_number is None else ("0-9" if expected_number<10 else ("10-19" if expected_number<20 else ("20-29" if expected_number<30 else ("30-39" if expected_number<40 else ("40-49" if expected_number<50 else "50+"))))),
+                            "segment_index": None,
+                            "segment_count": 1,
+                            "segment_duration_s": len(pcm16_full)/recognizer.SAMPLE_RATE,
+                            "segment_processing_time_s": decode_end - decode_start,
+                            "audio_start": start_feed_time,
+                            "audio_end": start_feed_time + len(pcm16_full)/recognizer.SAMPLE_RATE,
+                            "first_decoded_token_time": decode_start,
+                            "final_result_time": decode_end,
+                            "is_aggregate": 1,
+                        })
+                        continue
+
+                    # After segment_list creation
+                    if not segment_list:
+                        rows.append({
+                            "test_run_id": cfg.test_run_id,
+                            "wav_id": sample.audio_path.name,
+                            "recognized_text_raw": "",
+                            "recognized_text_normalized": "",
+                            "predicted_number": None,
+                            "expected_number": sample.expected_number,
+                            "speaker_id": sample.speaker_id,
+                            "gender": sample.gender,
+                            "age": sample.age,
+                            "accent": sample.accent,
+                            "recording_device": sample.recording_device,
+                            "noise_type": sample.noise_type,
+                            "snr_db": sample.snr_db,
+                            "duration_s": 0.0,
+                            "model_name": cfg.model.name,
+                            "model_size": cfg.model.size,
+                            "config_json": cfg.to_json(),
+                            "vad_setting": cfg.vad_mode,
+                            "processing_time_s": 0.0,
+                            "RTF": 0.0,
+                            "latency_ms": 0.0,
+                            "cpu_percent": psutil.cpu_percent(interval=0.0),
+                            "gpu_percent": None,
+                            "memory_mb": psutil.Process(os.getpid()).memory_info().rss/(1024**2),
+                            "gpu_memory_mb": None,
+                            "numeric_exact_match": 0,
+                            "parser_species": None,
+                            "parser_length_cm": None,
+                            "parser_exact_match": 0,
+                            "final_display_text": "",
+                            "WER": None,
+                            "CER": None,
+                            "DER": None,
+                            "absolute_error": None,
+                            "error_type": None,
+                            "notes": "no_segments",
+                            "sample_source": sample.source,
+                            "used_prefix": 1,
+                            "number_range": "unknown" if sample.expected_number is None else ("0-9" if sample.expected_number<10 else ("10-19" if sample.expected_number<20 else ("20-29" if sample.expected_number<30 else ("30-39" if sample.expected_number<40 else ("40-49" if sample.expected_number<50 else "50+"))))),
+                            "segment_index": None,
+                            "segment_count": 0,
+                            "segment_duration_s": 0.0,
+                            "segment_processing_time_s": 0.0,
+                            "audio_start": None,
+                            "audio_end": None,
+                            "first_decoded_token_time": None,
+                            "final_result_time": None,
+                            "is_aggregate": 1,
+                        })
+                        continue
+
+                    # Segment mode with production-like parsing & state
+                    all_text_parts = []
+                    segment_count = len(segment_list)
+                    total_audio_dur = sum(seg[0].size for seg in segment_list)/recognizer.SAMPLE_RATE
+                    aggregate_processing = 0.0
+                    expected_number = sample.expected_number
+                    last_species = None
+                    measurement_pred = None
+
+                    tn = TextNormalizer()
+
+                    for idx,(seg_arr, seg_start, seg_end) in enumerate(segment_list):
+                        combined = np.concatenate((getattr(recognizer, '_number_sound', np.zeros(0, dtype=np.int16)), seg_arr))
+                        wav_path = BaseSpeechRecognizer._write_wav_bytes(combined, recognizer.SAMPLE_RATE)  # type: ignore
+                        decode_start = time.time()
+                        try:
+                            segments = recognizer._backend_transcribe(segment=combined, wav_path=wav_path)  # type: ignore
+                        except Exception as e:
+                            logger.error(f"Segment transcribe failed: {e}")
+                            segments = []
+                        decode_end = time.time()
+                        aggregate_processing += (decode_end - decode_start)
+                        try:
+                            os.remove(wav_path)
+                        except Exception:
+                            pass
+                        raw_text = " ".join((s.text for s in segments)).strip()
+                        all_text_parts.append(raw_text)
+
+                        # Production-style normalization & parsing
+                        final_display = raw_text
+                        parser_species = None
+                        parser_length_cm = None
+                        try:
+                            corrected = tn.apply_fish_asr_corrections(raw_text)
+                            parsed = self.fish_parser.parse_text(corrected)
+                            parser_species = getattr(parsed, 'species', None)
+                            if parser_species:
+                                last_species = parser_species  # stateful like production
+                            parser_length_cm = getattr(parsed, 'length_cm', None)
+                            if parser_length_cm is not None:
+                                val = float(parser_length_cm)
+                                num_str = (f"{val:.1f}").rstrip("0").rstrip(".")
+                                final_display = f"{last_species} {num_str} cm" if last_species else f"{num_str} cm"
+                            else:
+                                final_display = corrected
+                        except Exception:
+                            pass
+
+                        # Numeric normalization fallback only if no parser length
+                        predicted_number_seg = None
+                        if parser_length_cm is not None:
+                            predicted_number_seg = float(parser_length_cm)
+                            if measurement_pred is None:
+                                measurement_pred = predicted_number_seg
+                        else:
+                            # fallback normalization (no parse length)
+                            norm_seg = self.normalizer.normalize(raw_text)
+                            predicted_number_seg = norm_seg.predicted_number
+
+                        # Determine range bucket
+                        if expected_number is None:
+                            number_range_val = "unknown"
+                        else:
+                            vexp = expected_number
+                            if vexp < 10: number_range_val = "0-9"
+                            elif vexp < 20: number_range_val = "10-19"
+                            elif vexp < 30: number_range_val = "20-29"
+                            elif vexp < 40: number_range_val = "30-39"
+                            elif vexp < 50: number_range_val = "40-49"
+                            else: number_range_val = "50+"
+
+                        rows.append({
+                            "test_run_id": cfg.test_run_id,
+                            "wav_id": sample.audio_path.name,
+                            "recognized_text_raw": raw_text,
+                            "recognized_text_normalized": raw_text.lower(),
+                            "predicted_number": predicted_number_seg,
+                            "expected_number": expected_number,
+                            "speaker_id": sample.speaker_id,
+                            "gender": sample.gender,
+                            "age": sample.age,
+                            "accent": sample.accent,
+                            "recording_device": sample.recording_device,
+                            "noise_type": sample.noise_type,
+                            "snr_db": sample.snr_db,
+                            "duration_s": total_audio_dur,
+                            "model_name": cfg.model.name,
+                            "model_size": cfg.model.size,
+                            "config_json": cfg.to_json(),
+                            "vad_setting": cfg.vad_mode,
+                            "processing_time_s": decode_end - decode_start,
+                            "RTF": (decode_end - decode_start) / ((seg_arr.size)/recognizer.SAMPLE_RATE) if seg_arr.size>0 else None,
+                            "latency_ms": (decode_start - seg_start)*1000.0,
+                            "cpu_percent": psutil.cpu_percent(interval=0.0),
+                            "gpu_percent": None,
+                            "memory_mb": psutil.Process(os.getpid()).memory_info().rss/(1024**2),
+                            "gpu_memory_mb": None,
+                            "numeric_exact_match": None if expected_number is None or predicted_number_seg is None else int(abs(predicted_number_seg-expected_number) < 1e-6),
+                            "parser_species": parser_species,
+                            "parser_length_cm": parser_length_cm,
+                            "parser_exact_match": None if (parser_length_cm is None or expected_number is None) else int(float(parser_length_cm)==float(expected_number)),
+                            "final_display_text": final_display,
+                            "WER": None,
+                            "CER": None,
+                            "DER": None,
+                            "absolute_error": None if (expected_number is None or predicted_number_seg is None) else abs(predicted_number_seg-expected_number),
+                            "error_type": None,
+                            "notes": "segment_row",
+                            "sample_source": sample.source,
+                            "used_prefix": 1,
+                            "number_range": number_range_val,
+                            "segment_index": idx,
+                            "segment_count": segment_count,
+                            "segment_duration_s": seg_arr.size/recognizer.SAMPLE_RATE,
+                            "segment_processing_time_s": decode_end - decode_start,
+                            "audio_start": seg_start,
+                            "audio_end": seg_end,
+                            "first_decoded_token_time": decode_start,
+                            "final_result_time": decode_end,
+                            "is_aggregate": 0,
+                            "is_measurement": 1 if parser_length_cm is not None else 0,
+                        })
+                    # Aggregate row
+                    aggregate_text = " ".join(t for t in all_text_parts if t).strip()
+                    norm = self.normalizer.normalize(aggregate_text)
+                    predicted_number = measurement_pred if measurement_pred is not None else norm.predicted_number
+                    expected_text = "" if expected_number is None else str(expected_number)
+                    wer = word_error_rate(norm.normalized_text, expected_text)
+                    cer = char_error_rate(norm.normalized_text, expected_text)
+                    der = digit_error_rate(predicted_number, expected_number)
+                    nem = numeric_exact_match(predicted_number, expected_number)
+                    error_type = self.normalizer.classify_error(predicted_number, expected_number, aggregate_text, expected_text)
+                    absolute_error = None if (predicted_number is None or expected_number is None) else abs(predicted_number - expected_number)
+                    # final display adopt last segment final_display_text if exists
+                    last_display = None
+                    for r in reversed(rows):
+                        if r["wav_id"] == sample.audio_path.name and r.get("final_display_text"):
+                            last_display = r["final_display_text"]
+                            break
+                    rows.append({
+                        "test_run_id": cfg.test_run_id,
+                        "wav_id": sample.audio_path.name,
+                        "recognized_text_raw": aggregate_text,
+                        "recognized_text_normalized": norm.normalized_text,
+                        "predicted_number": predicted_number,
+                        "expected_number": expected_number,
+                        "speaker_id": sample.speaker_id,
+                        "gender": sample.gender,
+                        "age": sample.age,
+                        "accent": sample.accent,
+                        "recording_device": sample.recording_device,
+                        "noise_type": sample.noise_type,
+                        "snr_db": sample.snr_db,
+                        "duration_s": total_audio_dur,
+                        "model_name": cfg.model.name,
+                        "model_size": cfg.model.size,
+                        "config_json": cfg.to_json(),
+                        "vad_setting": cfg.vad_mode,
+                        "processing_time_s": aggregate_processing,
+                        "RTF": aggregate_processing / total_audio_dur if total_audio_dur>0 else None,
+                        "latency_ms": None,
+                        "cpu_percent": psutil.cpu_percent(interval=0.0),
+                        "gpu_percent": None,
+                        "memory_mb": psutil.Process(os.getpid()).memory_info().rss/(1024**2),
+                        "gpu_memory_mb": None,
+                        "numeric_exact_match": nem,
+                        "parser_species": None,
+                        "parser_length_cm": measurement_pred,
+                        "parser_exact_match": None if (measurement_pred is None or expected_number is None) else int(measurement_pred==expected_number),
+                        "final_display_text": last_display,
+                        "WER": wer,
+                        "CER": cer,
+                        "DER": der,
+                        "absolute_error": absolute_error,
+                        "error_type": error_type,
+                        "notes": "aggregate",
+                        "sample_source": sample.source,
+                        "used_prefix": 1,
+                        "number_range": "unknown" if expected_number is None else ("0-9" if expected_number<10 else ("10-19" if expected_number<20 else ("20-29" if expected_number<30 else ("30-39" if expected_number<40 else ("40-49" if expected_number<50 else "50+"))))),
+                        "segment_index": None,
+                        "segment_count": segment_count,
+                        "segment_duration_s": None,
+                        "segment_processing_time_s": aggregate_processing,
+                        "audio_start": segment_list[0][1] if segment_list else None,
+                        "audio_end": segment_list[-1][2] if segment_list else None,
+                        "first_decoded_token_time": None,
+                        "final_result_time": None,
+                        "is_aggregate": 1,
+                        "is_measurement": 1 if measurement_pred is not None else 0,
+                    })
+                continue  # move to next config or sample set
+
+            # === Original (non-production replay) path ===
             for sample in tqdm(samples, desc=f"{cfg.model.name}-{cfg.model.size}"):
                 try:
                     audio, sr = _load_audio(sample.audio_path)
@@ -509,6 +946,19 @@ class ASREvaluator:
                 if predicted_number is not None and expected_number is not None:
                     absolute_error = abs(predicted_number - expected_number)
 
+                used_prefix_flag = 1 if number_prefix is not None else 0
+
+                # Determine number range bucket
+                if expected_number is None:
+                    number_range = "unknown"
+                else:
+                    v = expected_number
+                    if v < 10: number_range = "0-9"
+                    elif v < 20: number_range = "10-19"
+                    elif v < 30: number_range = "20-29"
+                    elif v < 40: number_range = "30-39"
+                    elif v < 50: number_range = "40-49"
+                    else: number_range = "50+"
                 row = {
                     "test_run_id": cfg.test_run_id,
                     "wav_id": sample.audio_path.name,
@@ -545,6 +995,11 @@ class ASREvaluator:
                     "absolute_error": absolute_error,
                     "error_type": error_type,
                     "notes": None,
+                    "sample_source": sample.source,
+                    "used_prefix": used_prefix_flag,
+                    "number_range": number_range,
+                    "final_display_text": None,
+                    "is_measurement": 1 if parser_length_cm is not None else 0,
                 }
                 rows.append(row)
 
@@ -563,6 +1018,8 @@ class ASREvaluator:
         failures = df[df["numeric_exact_match"] == 0]
         failures.to_parquet(failures_path, index=False)
 
+        # Use only aggregate rows for summaries to avoid double counting
+        df_agg = df[df.get("is_aggregate", 1) == 1]
         # Aggregations
         agg_funcs = {
             "numeric_exact_match": "mean",
@@ -574,19 +1031,19 @@ class ASREvaluator:
             "RTF": ["mean"],
             "processing_time_s": ["mean"],
         }
-        summary_model = df.groupby(["model_name", "model_size"]).agg(agg_funcs)
-        summary_accent = df.groupby(["accent", "model_name", "model_size"]).agg(agg_funcs)
-        summary_noise = df.groupby(["noise_type", "model_name", "model_size"]).agg(agg_funcs)
+        summary_model = df_agg.groupby(["model_name", "model_size"]).agg(agg_funcs)
+        summary_accent = df_agg.groupby(["accent", "model_name", "model_size"]).agg(agg_funcs)
+        summary_noise = df_agg.groupby(["noise_type", "model_name", "model_size"]).agg(agg_funcs)
 
         # RTF percentiles overall
-        rtf_percentiles = compute_percentiles(df["RTF"].dropna().tolist())
+        rtf_percentiles = compute_percentiles(df_agg["RTF"].dropna().tolist())
         rtf_meta = pd.DataFrame([
             {"p50": rtf_percentiles.p50, "p95": rtf_percentiles.p95, "p99": rtf_percentiles.p99}
         ])
 
         # RTF percentiles per model
         rtf_model_records = []
-        for (mname, msize), sub in df.groupby(["model_name", "model_size"]):
+        for (mname, msize), sub in df_agg.groupby(["model_name", "model_size"]):
             pct = compute_percentiles(sub["RTF"].dropna().tolist())
             rtf_model_records.append({
                 "model_name": mname,
@@ -597,6 +1054,14 @@ class ASREvaluator:
             })
         rtf_model_df = pd.DataFrame(rtf_model_records)
 
+        # Additional pivot: number range
+        if "number_range" in df_agg.columns:
+            try:
+                summary_range = df_agg.groupby(["number_range", "model_name", "model_size"]).agg(agg_funcs)
+            except Exception:
+                summary_range = None
+        else:
+            summary_range = None
         with pd.ExcelWriter(summary_path, engine="openpyxl") as xl:
             df.head(200).to_excel(xl, sheet_name="sample", index=False)
             summary_model.to_excel(xl, sheet_name="by_model")
@@ -604,5 +1069,45 @@ class ASREvaluator:
             summary_noise.to_excel(xl, sheet_name="by_noise")
             rtf_meta.to_excel(xl, sheet_name="rtf_percentiles", index=False)
             rtf_model_df.to_excel(xl, sheet_name="rtf_by_model", index=False)
+            if summary_range is not None:
+                summary_range.to_excel(xl, sheet_name="by_range")
 
         logger.info(f"Wrote: {results_path}, {failures_path}, {summary_path}")
+
+        # Write run summary metadata (json + markdown)
+        try:
+            import platform, sys, datetime
+            summary_meta = {
+                "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "python": sys.version.split()[0],
+                "platform": platform.platform(),
+                "total_rows": int(len(df)),
+                "aggregate_rows": int(len(df_agg)),
+                "models": sorted(df_agg.model_name.unique().tolist()),
+                "model_sizes": sorted(df_agg.model_size.unique().tolist()),
+                "numeric_exact_match_mean": float(df_agg.numeric_exact_match.dropna().mean()) if "numeric_exact_match" in df_agg else None,
+                "parser_exact_match_mean": float(df_agg.parser_exact_match.dropna().mean()) if "parser_exact_match" in df_agg else None,
+                "rtf_p50": rtf_percentiles.p50,
+                "rtf_p95": rtf_percentiles.p95,
+                "rtf_p99": rtf_percentiles.p99,
+            }
+            (self.output_dir / "run_summary.json").write_text(json.dumps(summary_meta, indent=2), encoding="utf-8")
+            # Markdown
+            md_lines = [
+                "# Evaluation Summary", "", f"Created: {summary_meta['created_at']}",
+                f"Models: {', '.join(summary_meta['models'])}",
+                f"Model Sizes: {', '.join(summary_meta['model_sizes'])}",
+                f"Rows: {summary_meta['total_rows']}",
+                f"Numeric Exact Match Mean: {summary_meta['numeric_exact_match_mean']:.4f}",
+                f"Parser Exact Match Mean: {summary_meta['parser_exact_match_mean']:.4f}" if summary_meta['parser_exact_match_mean'] is not None else "Parser Exact Match Mean: n/a",
+                f"RTF p50/p95/p99: {rtf_percentiles.p50:.3f} / {rtf_percentiles.p95:.3f} / {rtf_percentiles.p99:.3f}",
+                "", "## Top 10 Failures", ""
+            ]
+            fails_view = df[df.numeric_exact_match == 0].head(10)
+            for _, fr in fails_view.iterrows():
+                disp = fr.get('final_display_text') or ''
+                md_lines.append(f"- {fr['wav_id']}: pred={fr.get('predicted_number')} exp={fr.get('expected_number')} raw='{fr.get('recognized_text_raw')}' final='{disp}'")
+            (self.output_dir / "run_summary.md").write_text("\n".join(md_lines), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"Failed writing summary metadata: {e}")
+

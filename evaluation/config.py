@@ -53,6 +53,7 @@ class EvaluationConfig:
     concat_number: bool = True
     number_audio_path: str | None = None
     audio_root: str | None = None
+    production_replay: bool = False
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -90,6 +91,7 @@ def make_config(
     concat_number: bool = False,
     number_audio_path: str | None = None,
     audio_root: str | None = None,
+    production_replay: bool = False,
     **extra: Any,
 ) -> EvaluationConfig:
     """Helper to build a single EvaluationConfig."""
@@ -105,6 +107,7 @@ def make_config(
         concat_number=concat_number,
         number_audio_path=number_audio_path,
         audio_root=audio_root,
+        production_replay=production_replay,
         extra=extra,
     )
 
@@ -124,6 +127,7 @@ def expand_parameter_grid(
     concat_number: bool = False,
     number_audio_path: str | None = None,
     audio_root: str | None = None,
+    production_replay: bool = False,
     **extra_fixed: Any,
 ) -> List[EvaluationConfig]:
     """Expand a full Cartesian product of the provided parameter lists.
@@ -149,6 +153,7 @@ def expand_parameter_grid(
             concat_number=concat_number,
             number_audio_path=number_audio_path,
             audio_root=audio_root,
+            production_replay=production_replay,
             **extra_fixed,
         )
         configs.append(cfg)
