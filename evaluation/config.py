@@ -11,6 +11,13 @@ import json
 import hashlib
 import time
 
+# Recognizer attribute names (lowercase) that can be overridden / grid-expanded via model_specs
+RECOGNIZER_ATTRS = {
+    'sample_rate', 'channels', 'chunk_s', 'min_speech_s', 'max_segment_s', 'padding_ms',
+    'best_of', 'temperature', 'patience', 'length_penalty', 'repetition_penalty',
+    'without_timestamps', 'condition_on_previous_text', 'vad_filter', 'vad_parameters', 'word_timestamps',
+    'fish_prompt', 'prompt'
+}
 
 DEFAULT_BASE_CONFIG = {
     "model": "faster-whisper",
@@ -171,19 +178,34 @@ def expand_model_spec_grid(
 ) -> List[EvaluationConfig]:
     """Expand configs from a list of per-model spec dictionaries.
 
-    Each spec dict may contain keys:
-      name (required)
-      sizes, compute_types, devices, beams, chunks, vad_modes, languages (all optional lists)
-    Missing lists fall back to a single default element.
-    The Cartesian product is taken *per spec* (not across specs), so incompatible size/model
-    combinations are never produced.
+    Extended: In addition to the core dimension keys (sizes, compute_types, devices, beams,
+    chunks, vad_modes, languages) any recognizer attribute listed in RECOGNIZER_ATTRS can now
+    also be provided either as a single scalar (applied uniformly) or a list to be included
+    as its own Cartesian dimension. These extra attributes are injected into EvaluationConfig.extra
+    so they become available as overrides during production_replay (and for logging).
+
+    Example spec entry:
+      {
+        "name": "faster-whisper",
+        "sizes": ["base.en", "small.en"],
+        "compute_types": ["int8"],
+        "devices": ["cpu"],
+        "beams": [5, 10],
+        "chunks": [500],
+        "vad_modes": [2,3],
+        "min_speech_s": [0.15, 0.25],
+        "max_segment_s": 3.5,
+        "padding_ms": 600,
+        "chunk_s": 0.5,  # recognizer internal CHUNK_S seconds (distinct from streaming chunk ms)
+        "sample_rate": 16000
+      }
     """
-    defaults = {
+    core_defaults = {
         'sizes': ['base.en'],
         'compute_types': ['int8'],
         'devices': ['cpu'],
         'beams': [5],
-        'chunks': [500],
+        'chunks': [500],            # streaming chunk size (ms) for evaluation StreamingSimulator
         'vad_modes': [2],
         'languages': ['en'],
     }
@@ -194,31 +216,70 @@ def expand_model_spec_grid(
         name = spec.get('name') or spec.get('model')
         if not name:
             continue
-        sizes = spec.get('sizes', defaults['sizes'])
-        compute_types = spec.get('compute_types', defaults['compute_types'])
-        devices = spec.get('devices', defaults['devices'])
-        beams = spec.get('beams', defaults['beams'])
-        chunks = spec.get('chunks', defaults['chunks'])
-        vad_modes = spec.get('vad_modes', defaults['vad_modes'])
-        languages = spec.get('languages', defaults['languages'])
-        extra = {k: v for k, v in spec.items() if k not in {'name','model','sizes','compute_types','devices','beams','chunks','vad_modes','languages'}}
+        # Gather core lists
+        sizes = spec.get('sizes', core_defaults['sizes'])
+        compute_types = spec.get('compute_types', core_defaults['compute_types'])
+        devices = spec.get('devices', core_defaults['devices'])
+        beams = spec.get('beams', core_defaults['beams'])
+        chunks = spec.get('chunks', core_defaults['chunks'])
+        vad_modes = spec.get('vad_modes', core_defaults['vad_modes'])
+        languages = spec.get('languages', core_defaults['languages'])
+
+        # Build dict of extra recognizer attr name -> list of values (ensure list)
+        recognizer_dim_values: dict[str, list[Any]] = {}
+        for key, value in spec.items():
+            k_l = key.lower()
+            if k_l in RECOGNIZER_ATTRS:
+                if isinstance(value, list):
+                    recognizer_dim_values[k_l] = value
+                else:
+                    recognizer_dim_values[k_l] = [value]
+        # Normalize alias 'prompt' -> 'fish_prompt' to avoid duplication
+        if 'prompt' in recognizer_dim_values and 'fish_prompt' not in recognizer_dim_values:
+            recognizer_dim_values['fish_prompt'] = recognizer_dim_values.pop('prompt')
+        # Keys to exclude from extra (core + recognizer attr dims)
+        exclude_keys = {'name','model','sizes','compute_types','devices','beams','chunks','vad_modes','languages'} | set(recognizer_dim_values.keys()) | {'prompt'}
+        # Remaining spec items become fixed extras for every combination
+        spec_fixed_extras = {k: v for k, v in spec.items() if k not in exclude_keys}
+
+        # Create Cartesian product across core + dynamic recognizer dimensions
+        recognizer_dim_names = sorted(recognizer_dim_values.keys())  # stable order
+        recognizer_dim_lists = [recognizer_dim_values[n] for n in recognizer_dim_names]
+        # If no recognizer dims, still iterate once
+        if not recognizer_dim_names:
+            recognizer_dim_names = []
+            recognizer_dim_lists = [[]]
+
+        # For each combination of core and recognizer dims
         for (s, ct, dev, beam, chunk, vad, lang) in product(sizes, compute_types, devices, beams, chunks, vad_modes, languages):
-            cfg = make_config(
-                model_name=name,
-                size=s,
-                compute_type=ct,
-                device=dev,
-                beam=beam,
-                chunk_ms=chunk,
-                vad_mode=vad,
-                language=lang,
-                dataset_json=dataset_json,
-                concat_number=concat_number,
-                number_audio_path=number_audio_path,
-                audio_root=audio_root,
-                production_replay=production_replay,
-                **extra,
-                **extra_fixed,
-            )
-            all_cfgs.append(cfg)
+            # Iterate recognizer attribute combinations (if any)
+            if recognizer_dim_lists == [[]]:  # sentinel for no extra dims
+                recog_products = [()]
+            else:
+                recog_products = product(*recognizer_dim_lists)
+            for recog_vals in recog_products:
+                extra: Dict[str, Any] = {}
+                # Insert recognizer dynamic attrs
+                for idx, val in enumerate(recog_vals):
+                    extra[recognizer_dim_names[idx]] = val
+                # Insert fixed recognizer attrs (spec fixed extras) and any external fixed extras
+                extra.update(spec_fixed_extras)
+                extra.update(extra_fixed)  # global extras passed into expand_model_spec_grid
+                cfg = make_config(
+                    model_name=name,
+                    size=s,
+                    compute_type=ct,
+                    device=dev,
+                    beam=beam,
+                    chunk_ms=chunk,
+                    vad_mode=vad,
+                    language=lang,
+                    dataset_json=dataset_json,
+                    concat_number=concat_number,
+                    number_audio_path=number_audio_path,
+                    audio_root=audio_root,
+                    production_replay=production_replay,
+                    **extra,
+                )
+                all_cfgs.append(cfg)
     return all_cfgs

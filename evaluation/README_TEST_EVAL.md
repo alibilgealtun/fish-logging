@@ -53,19 +53,22 @@ Example (default):
       "beams": [5],
       "chunks": [500],
       "vad_modes": [2],
-      "languages": ["en"]
+      "languages": ["en"],
+      "fish_prompt": "Custom domain instruction (optional)"
     }
   ]
 }
 ```
-Fields:
-| Key | Meaning |
-|-----|---------|
-| dataset_json | JSON list of test items {"audio":"X.wav","expected":N} |
-| audio_root | Directory containing referenced audio files |
-| concat_number | Prepend number.wav prefix (standard mode only) |
-| production_replay | Emulate live segmentation (NoiseController + per‑segment decode) |
-| model_specs | List of per‑model specification blocks |
+New (2025-10) Supported Recognizer Override Keys (lowercase in JSON):
+- sample_rate, channels, chunk_s
+- min_speech_s, max_segment_s, padding_ms
+- best_of, temperature, patience, length_penalty, repetition_penalty
+- without_timestamps, condition_on_previous_text, vad_filter, vad_parameters, word_timestamps
+- fish_prompt (or alias prompt)
+
+If any of these are lists they are expanded as additional grid dimensions per model spec. Scalars apply uniformly.
+
+`fish_prompt` allows you to inject a custom domain prompt used by the recognizer (overrides the built‑in FISH_PROMPT). Alias `prompt` is accepted and normalized to `fish_prompt`.
 
 Each `model_specs` entry (per model) may include:
 - name (required)
@@ -87,6 +90,22 @@ Only the **Cartesian product inside each single model spec** is expanded. There 
 }
 ```
 Insert into `model_specs` array and re‑run the evaluation command.
+
+### Custom Prompt Override Example
+```json
+{
+  "model_specs": [
+    {
+      "name": "faster-whisper",
+      "sizes": ["base.en"],
+      "beams": [5,10],
+      "min_speech_s": [0.15, 0.25],
+      "fish_prompt": "Focus on fish species and length numbers (cm). Ignore unrelated chatter."
+    }
+  ]
+}
+```
+The resulting rows in `results.parquet` will include columns `fish_prompt` and `model_extra_json` so you can audit which prompt and overrides were applied.
 
 ---
 ## 3. Override Precedence
@@ -131,8 +150,13 @@ Created under: `evaluation_outputs/run_YYYY_MM_DD_HHMMSS[_n]/`
 | run_summary.md | Human summary + top failures |
 | nem_by_model_size.png* | (Optional plots) Numeric exact match bar chart |
 | rtf_distribution.png* | (Optional plots) RTF distribution (log) |
+| model_specs_used.json | Snapshot of the model specs / flat parameters + context |
 
 (* only if `--plots` passed)
+
+Added columns (2025-10):
+- fish_prompt: The effective recognizer prompt for that row (per segment & aggregate in production replay, or from spec in standard mode).
+- model_extra_json: JSON dump of all extra override attributes applied (including prompt and timing overrides).
 
 ---
 ## 7. Key Columns (Condensed)
@@ -154,6 +178,8 @@ Created under: `evaluation_outputs/run_YYYY_MM_DD_HHMMSS[_n]/`
 | used_prefix | 1 if number prefix applied |
 | segment_index / segment_count | Segment structure |
 | notes | segment_row / aggregate / fallback_full_decode / no_segments |
+| fish_prompt | Effective prompt string (if overridden) |
+| model_extra_json | Serialized JSON of extra overrides from spec |
 
 ---
 ## 8. Failure Analysis
@@ -198,6 +224,7 @@ Numeric mismatches can differ from integration tests because integration tests r
 | New metric | Implement in `evaluation/metrics.py` then compute & add to rows |
 | Custom aggregation | Modify `_write_outputs` in `evaluation/pipeline.py` |
 | Alternate preset sets | Add json under `evaluation/presets/` and load with `--preset` |
+| Add recognizer override | include key in model spec (e.g. `"min_speech_s": 0.2`). It will appear in `model_extra_json` and applied to production replay recognizers. |
 
 ---
 ## 12. Standard vs Integration Tests
@@ -211,6 +238,8 @@ To reconcile differences:
 
 ---
 ## 13. Future Improvements (Planned Ideas)
+- Prompt version hashing for reproducible comparisons
+- Validation schema for model_specs.json to flag unknown keys
 - Optional `--no-segment-prefix` flag for production replay
 - Initial species state injection for deterministic parser behavior across segments
 - True streaming token timestamps for accurate first token latency
@@ -265,4 +294,3 @@ python -m evaluation.run_evaluation --plots
 
 ---
 For application usage, architecture, and non‑evaluation details see the project root `README.md`.
-

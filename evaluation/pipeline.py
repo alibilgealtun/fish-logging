@@ -455,8 +455,43 @@ class ASREvaluator:
                         recognizer.COMPUTE_TYPE = cfg.model.compute_type
                     if hasattr(recognizer, 'BEAM_SIZE'):
                         recognizer.BEAM_SIZE = cfg.inference_config.beam_size
+                    # Ensure VAD aggressiveness from evaluation config is reflected
+                    if hasattr(recognizer, 'VAD_MODE'):
+                        try:
+                            recognizer.VAD_MODE = cfg.vad_mode
+                        except Exception:
+                            pass
                 except Exception:
                     pass
+                # Apply extra overrides from config.extra (advanced recognizer tuning)
+                try:
+                    overrides_applied = []
+                    for attr in [
+                        'SAMPLE_RATE','CHANNELS','CHUNK_S','VAD_MODE','MIN_SPEECH_S','MAX_SEGMENT_S','PADDING_MS',
+                        'BEST_OF','TEMPERATURE','PATIENCE','LENGTH_PENALTY','REPETITION_PENALTY',
+                        'WITHOUT_TIMESTAMPS','CONDITION_ON_PREVIOUS_TEXT','VAD_FILTER','VAD_PARAMETERS','WORD_TIMESTAMPS',
+                        'FISH_PROMPT'
+                    ]:
+                        if attr.lower() in cfg.extra:
+                            val = cfg.extra[attr.lower()]
+                            try:
+                                setattr(recognizer, attr, val)
+                                overrides_applied.append(f"{attr}={val if isinstance(val,(int,float,str,bool)) else '<obj>'}")
+                            except Exception:
+                                pass
+                    # Recompute chunk / noise controller if timing params changed
+                    if any(k in cfg.extra for k in ['sample_rate','chunk_s','vad_mode','min_speech_s','max_segment_s']):
+                        try:
+                            recognizer._chunk_frames = int(recognizer.SAMPLE_RATE * recognizer.CHUNK_S)
+                            from noise.controller import NoiseController as _NC
+                            recognizer._noise_controller = _NC(sample_rate=recognizer.SAMPLE_RATE, vad_mode=recognizer.VAD_MODE,
+                                                               min_speech_s=recognizer.MIN_SPEECH_S, max_segment_s=recognizer.MAX_SEGMENT_S)
+                        except Exception:
+                            pass
+                    if overrides_applied:
+                        logger.info(f"Applied recognizer overrides: {', '.join(overrides_applied)}")
+                except Exception as e:
+                    logger.debug(f"Recognizer override error: {e}")
                 # Force model load
                 try:
                     recognizer._load_backend_model()  # type: ignore
@@ -467,7 +502,7 @@ class ASREvaluator:
 
                 from noise.controller import NoiseController  # local import
 
-                for sample in tqdm(samples, desc=f"{cfg.model.name}-{cfg.model.size}"):
+                for sample in tqdm(samples, desc=f"{cfg.model.name}-{cfg.model.size}", bar_format="{desc} {n_fmt}/{total_fmt}", ncols=28):
                     try:
                         audio, sr = _load_audio(sample.audio_path)
                     except Exception as e:
@@ -538,6 +573,13 @@ class ASREvaluator:
                         except Exception:
                             pass
                         raw_text = " ".join((s.text for s in segments)).strip()
+                        avg_conf = None
+                        try:
+                            confs = [getattr(s,'confidence',None) for s in segments if getattr(s,'confidence',None) is not None]
+                            if confs:
+                                avg_conf = float(np.mean(confs))
+                        except Exception:
+                            pass
                         # Production-like parsing (as in BaseSpeechRecognizer)
                         final_display = raw_text
                         parser_species = None
@@ -615,7 +657,12 @@ class ASREvaluator:
                             "first_decoded_token_time": decode_start,
                             "final_result_time": decode_end,
                             "is_aggregate": 1,
+                            "confidence": avg_conf,
+                            "fish_prompt": getattr(recognizer, 'FISH_PROMPT', None),
+                            "model_extra_json": json.dumps(cfg.extra, ensure_ascii=False, sort_keys=True),
                         })
+                        _progress_log(sample.speaker_id, sample.audio_path.name, expected_number, predicted_number, nem, avg_conf)
+                        _detailed_sample_log(sample.audio_path.name, raw_text, parser_species, parser_length_cm, expected_number, predicted_number)
                         continue
 
                     # After segment_list creation
@@ -669,6 +716,8 @@ class ASREvaluator:
                             "first_decoded_token_time": None,
                             "final_result_time": None,
                             "is_aggregate": 1,
+                            "fish_prompt": getattr(recognizer, 'FISH_PROMPT', None),
+                            "model_extra_json": json.dumps(cfg.extra, ensure_ascii=False, sort_keys=True),
                         })
                         continue
 
@@ -699,6 +748,13 @@ class ASREvaluator:
                         except Exception:
                             pass
                         raw_text = " ".join((s.text for s in segments)).strip()
+                        seg_conf = None
+                        try:
+                            confs = [getattr(s,'confidence',None) for s in segments if getattr(s,'confidence',None) is not None]
+                            if confs:
+                                seg_conf = float(np.mean(confs))
+                        except Exception:
+                            pass
                         all_text_parts.append(raw_text)
 
                         # Production-style normalization & parsing
@@ -794,7 +850,11 @@ class ASREvaluator:
                             "final_result_time": decode_end,
                             "is_aggregate": 0,
                             "is_measurement": 1 if parser_length_cm is not None else 0,
+                            "fish_prompt": getattr(recognizer, 'FISH_PROMPT', None),
+                            "model_extra_json": json.dumps(cfg.extra, ensure_ascii=False, sort_keys=True),
                         })
+                        # Optional segment level logging (disabled by default for noise). Uncomment if needed.
+                        # _progress_log(sample.speaker_id, f"{sample.audio_path.name}[seg{idx}]", expected_number, predicted_number_seg, rows[-1]["numeric_exact_match"], seg_conf)
                     # Aggregate row
                     aggregate_text = " ".join(t for t in all_text_parts if t).strip()
                     norm = self.normalizer.normalize(aggregate_text)
@@ -862,11 +922,15 @@ class ASREvaluator:
                         "final_result_time": None,
                         "is_aggregate": 1,
                         "is_measurement": 1 if measurement_pred is not None else 0,
+                        "fish_prompt": getattr(recognizer, 'FISH_PROMPT', None),
+                        "model_extra_json": json.dumps(cfg.extra, ensure_ascii=False, sort_keys=True),
                     })
+                    _progress_log(sample.speaker_id, sample.audio_path.name, expected_number, predicted_number, nem, rows[-1].get('confidence'))
+                    _detailed_sample_log(sample.audio_path.name, aggregate_text, None, measurement_pred, expected_number, predicted_number)
                 continue  # move to next config or sample set
 
             # === Original (non-production replay) path ===
-            for sample in tqdm(samples, desc=f"{cfg.model.name}-{cfg.model.size}"):
+            for sample in tqdm(samples, desc=f"{cfg.model.name}-{cfg.model.size}", bar_format="{desc} {n_fmt}/{total_fmt}", ncols=28):
                 try:
                     audio, sr = _load_audio(sample.audio_path)
                 except Exception as e:
@@ -999,20 +1063,13 @@ class ASREvaluator:
                     "used_prefix": used_prefix_flag,
                     "number_range": number_range,
                     "final_display_text": None,
-                    "is_measurement": 1 if parser_length_cm is not None else 0,
-                    # New unified schema fields for standard mode
-                    "is_aggregate": 1,  # single-pass row is an aggregate representation
-                    "segment_index": None,
-                    "segment_count": 1,
-                    "segment_duration_s": timing["audio_duration_s"],
-                    "segment_processing_time_s": timing["processing_time_s"],
-                    "audio_start": timing.get("audio_start_time"),
-                    "audio_end": (timing.get("audio_start_time") or 0) + timing["audio_duration_s"],
-                    "first_decoded_token_time": timing.get("first_token_time"),
-                    "final_result_time": timing.get("final_result_time"),
+                    "confidence": None,  # standard mode currently lacks per-segment confidence
+                    "fish_prompt": cfg.extra.get('fish_prompt'),
+                    "model_extra_json": json.dumps(cfg.extra, ensure_ascii=False, sort_keys=True),
                 }
                 rows.append(row)
-
+                _progress_log(sample.speaker_id, sample.audio_path.name, expected_number, predicted_number, nem, None)
+                _detailed_sample_log(sample.audio_path.name, recognized_raw, parser_species, parser_length_cm, expected_number, predicted_number)
         df = pd.DataFrame(rows)
         if not df.empty:
             self._write_outputs(df)
@@ -1043,6 +1100,7 @@ class ASREvaluator:
             "absolute_error": "mean",
             "RTF": ["mean"],
             "processing_time_s": ["mean"],
+            # confidence intentionally not aggregated (can add later)
         }
         summary_model = df_agg.groupby(["model_name", "model_size"]).agg(agg_funcs)
         summary_accent = df_agg.groupby(["accent", "model_name", "model_size"]).agg(agg_funcs)
@@ -1104,6 +1162,17 @@ class ASREvaluator:
                 "rtf_p95": rtf_percentiles.p95,
                 "rtf_p99": rtf_percentiles.p99,
             }
+            # Attempt to load model_specs_used.json (snapshot created at run start)
+            try:
+                ms_path = self.output_dir / "model_specs_used.json"
+                if ms_path.exists():
+                    ms_text = ms_path.read_text(encoding="utf-8")
+                    try:
+                        summary_meta["model_specs_full"] = json.loads(ms_text)
+                    except Exception:
+                        summary_meta["model_specs_full_raw"] = ms_text
+            except Exception as e:  # non-fatal
+                logger.debug(f"Could not attach model specs to summary: {e}")
             (self.output_dir / "run_summary.json").write_text(json.dumps(summary_meta, indent=2), encoding="utf-8")
             # Markdown
             md_lines = [
@@ -1111,11 +1180,23 @@ class ASREvaluator:
                 f"Models: {', '.join(summary_meta['models'])}",
                 f"Model Sizes: {', '.join(summary_meta['model_sizes'])}",
                 f"Rows: {summary_meta['total_rows']}",
-                f"Numeric Exact Match Mean: {summary_meta['numeric_exact_match_mean']:.4f}",
+                f"Numeric Exact Match Mean: {summary_meta['numeric_exact_match_mean']:.4f}" if summary_meta['numeric_exact_match_mean'] is not None else "Numeric Exact Match Mean: n/a",
                 f"Parser Exact Match Mean: {summary_meta['parser_exact_match_mean']:.4f}" if summary_meta['parser_exact_match_mean'] is not None else "Parser Exact Match Mean: n/a",
                 f"RTF p50/p95/p99: {rtf_percentiles.p50:.3f} / {rtf_percentiles.p95:.3f} / {rtf_percentiles.p99:.3f}",
-                "", "## Top 10 Failures", ""
             ]
+            # Embed model specs if present
+            if "model_specs_full" in summary_meta or "model_specs_full_raw" in summary_meta:
+                md_lines.extend(["", "## Model Specs", ""])
+                try:
+                    if "model_specs_full" in summary_meta:
+                        ms_pretty = json.dumps(summary_meta["model_specs_full"], indent=2, ensure_ascii=False, sort_keys=True)
+                        md_lines.extend(["```json", ms_pretty, "```"])
+                    else:
+                        ms_raw = summary_meta["model_specs_full_raw"]
+                        md_lines.extend(["```", ms_raw, "```"])
+                except Exception:
+                    pass
+            md_lines.extend(["", "## Top 10 Failures", ""])
             fails_view = df[df.numeric_exact_match == 0].head(10)
             for _, fr in fails_view.iterrows():
                 disp = fr.get('final_display_text') or ''
@@ -1124,3 +1205,25 @@ class ASREvaluator:
         except Exception as e:
             logger.debug(f"Failed writing summary metadata: {e}")
 
+# Progress logging helper (added to avoid NameError)
+# (kept for single-line summary if needed)
+def _progress_log(speaker: str, wav: str, expected, predicted, nem, confidence):
+    try:
+        status = "PASSED" if nem == 1 else "FAIL"
+        logger.info(f"{speaker} -> {wav} - exp={expected} pred={predicted} {status} conf={confidence if confidence is not None else 'n/a'}")
+    except Exception:
+        pass
+
+def _detailed_sample_log(wav_id: str, raw_text: str, parser_species, parser_length_cm, expected_number, predicted_number):
+    """Pretty multi-line log similar to integration test output."""
+    try:
+        logger.info("────────────────────────────────────────")
+        logger.info(f"🎤 Audio: {wav_id}")
+        logger.info(f"📜 Raw transcript: '{raw_text}'")
+        if parser_species is not None or parser_length_cm is not None:
+            logger.info(f"📦 Parser result: species={parser_species} length_cm={parser_length_cm}")
+        else:
+            logger.info("📦 Parser result: <none>")
+        logger.info(f"✅ Expected length: {expected_number}, 🧮 Got: {parser_length_cm if parser_length_cm is not None else predicted_number}")
+    except Exception:
+        pass

@@ -320,6 +320,49 @@ def main(argv: List[str] | None = None):
         return 1
     logger.info(f"Generated {len(configs)} configurations")
 
+    # Persist the resolved model specifications / parameter sources for traceability
+    try:
+        specs_dump_path = run_out_dir / "model_specs_used.json"
+        payload = {}
+        if hasattr(ns, 'model_specs_inline'):
+            payload = {"model_specs": getattr(ns, 'model_specs_inline')}
+        elif getattr(ns, 'model_specs_path', None):
+            try:
+                raw_text = Path(ns.model_specs_path).read_text(encoding='utf-8')
+                # attempt to parse; if fail store raw
+                try:
+                    payload = json.loads(raw_text)
+                except Exception:
+                    payload = {"raw": raw_text}
+            except Exception as e:
+                payload = {"error": f"failed to read original model_specs file: {e}"}
+        else:
+            # Flat parameter mode -> synthesize a spec summary
+            payload = {
+                "flat_parameters": {
+                    "models": ns.models,
+                    "sizes": ns.sizes,
+                    "compute_types": ns.compute_types,
+                    "devices": ns.devices,
+                    "beams": ns.beams,
+                    "chunks": ns.chunks,
+                    "vad_modes": ns.vad_modes,
+                    "languages": ns.languages,
+                }
+            }
+        # Attach top-level run context
+        payload["context"] = {
+            "dataset_json": ns.dataset_json,
+            "audio_root": ns.audio_root,
+            "concat_number": ns.concat_number,
+            "production_replay": ns.production_replay,
+            "timestamp": time.strftime('%Y-%m-%dT%H:%M:%SZ')
+        }
+        specs_dump_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding='utf-8')
+        logger.info(f" wrote model specs snapshot -> {specs_dump_path}")
+    except Exception as e:
+        logger.debug(f"Failed writing model_specs_used.json: {e}")
+
     # Determine dataset root used only for directory discovery fallback
     dataset_root = ns.dataset or (ns.audio_root if ns.audio_root else ".")
     evaluator = ASREvaluator(dataset_root=dataset_root, output_dir=run_out_dir, real_time=ns.real_time)

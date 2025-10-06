@@ -6,13 +6,36 @@
   "model_specs": [
     {
       "name": "faster-whisper",
-      "sizes": ["base.en"],
-      "compute_types": ["int8"],
-      "devices": ["cpu"],
-      "beams": [5],
-      "chunks": [500],
-      "vad_modes": [2],
-      "languages": ["en"]
+      "sizes": [
+        "medium.en"
+      ],
+      "compute_types": [
+        "int8"
+      ],
+      "devices": [
+        "cpu"
+      ],
+      "beams": [
+        5
+      ],
+      "chunks": [
+        100
+      ],
+      "vad_modes": [
+        2
+      ],
+      "languages": [
+        "en"
+      ],
+      "min_speech_s": [
+        0.25
+      ],
+      "max_segment_s": 3.5,
+      "sample_rate": 16000,
+      "chunk_s": 0.5,
+      "padding_ms": 600,
+      "fish_prompt": "         \"This is a continuous conversation about fish species and numbers (their measurements). \"\n        \"The user typically speaks fish specie or number. \"\n        \"Always prioritize fish species vocabulary over similar-sounding common words. \"\n        \"If a word sounds like a fish name, bias towards the fish name. \"\n        \"Common fish species include: trout, salmon, sea bass, tuna. \"\n        \"Units are typically centimeters (cm) or millimeters (mm), 'cm' is preferred in the transcript. \"\n        \"You might also hear 'cancel', 'wait' and 'start'.\""
+
     }
   ]
 }
