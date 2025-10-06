@@ -1,0 +1,18 @@
+{
+  "dataset_json": "tests/data/numbers.json",
+  "audio_root": "tests/audio",
+  "concat_number": true,
+  "production_replay": false,
+  "model_specs": [
+    {
+      "name": "faster-whisper",
+      "sizes": ["base.en"],
+      "compute_types": ["int8"],
+      "devices": ["cpu"],
+      "beams": [5],
+      "chunks": [500],
+      "vad_modes": [2],
+      "languages": ["en"]
+    }
+  ]
+}

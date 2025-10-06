@@ -1000,6 +1000,16 @@ class ASREvaluator:
                     "number_range": number_range,
                     "final_display_text": None,
                     "is_measurement": 1 if parser_length_cm is not None else 0,
+                    # New unified schema fields for standard mode
+                    "is_aggregate": 1,  # single-pass row is an aggregate representation
+                    "segment_index": None,
+                    "segment_count": 1,
+                    "segment_duration_s": timing["audio_duration_s"],
+                    "segment_processing_time_s": timing["processing_time_s"],
+                    "audio_start": timing.get("audio_start_time"),
+                    "audio_end": (timing.get("audio_start_time") or 0) + timing["audio_duration_s"],
+                    "first_decoded_token_time": timing.get("first_token_time"),
+                    "final_result_time": timing.get("final_result_time"),
                 }
                 rows.append(row)
 
@@ -1019,7 +1029,10 @@ class ASREvaluator:
         failures.to_parquet(failures_path, index=False)
 
         # Use only aggregate rows for summaries to avoid double counting
-        df_agg = df[df.get("is_aggregate", 1) == 1]
+        if "is_aggregate" in df.columns:
+            df_agg = df[df["is_aggregate"] == 1]
+        else:
+            df_agg = df  # backward compatibility
         # Aggregations
         agg_funcs = {
             "numeric_exact_match": "mean",

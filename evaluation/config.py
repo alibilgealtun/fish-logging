@@ -158,3 +158,67 @@ def expand_parameter_grid(
         )
         configs.append(cfg)
     return configs
+
+
+def expand_model_spec_grid(
+    model_specs: list[dict],
+    dataset_json: str | None = None,
+    concat_number: bool = False,
+    number_audio_path: str | None = None,
+    audio_root: str | None = None,
+    production_replay: bool = False,
+    **extra_fixed: Any,
+) -> List[EvaluationConfig]:
+    """Expand configs from a list of per-model spec dictionaries.
+
+    Each spec dict may contain keys:
+      name (required)
+      sizes, compute_types, devices, beams, chunks, vad_modes, languages (all optional lists)
+    Missing lists fall back to a single default element.
+    The Cartesian product is taken *per spec* (not across specs), so incompatible size/model
+    combinations are never produced.
+    """
+    defaults = {
+        'sizes': ['base.en'],
+        'compute_types': ['int8'],
+        'devices': ['cpu'],
+        'beams': [5],
+        'chunks': [500],
+        'vad_modes': [2],
+        'languages': ['en'],
+    }
+    all_cfgs: List[EvaluationConfig] = []
+    for spec in model_specs:
+        if not isinstance(spec, dict):
+            continue
+        name = spec.get('name') or spec.get('model')
+        if not name:
+            continue
+        sizes = spec.get('sizes', defaults['sizes'])
+        compute_types = spec.get('compute_types', defaults['compute_types'])
+        devices = spec.get('devices', defaults['devices'])
+        beams = spec.get('beams', defaults['beams'])
+        chunks = spec.get('chunks', defaults['chunks'])
+        vad_modes = spec.get('vad_modes', defaults['vad_modes'])
+        languages = spec.get('languages', defaults['languages'])
+        extra = {k: v for k, v in spec.items() if k not in {'name','model','sizes','compute_types','devices','beams','chunks','vad_modes','languages'}}
+        for (s, ct, dev, beam, chunk, vad, lang) in product(sizes, compute_types, devices, beams, chunks, vad_modes, languages):
+            cfg = make_config(
+                model_name=name,
+                size=s,
+                compute_type=ct,
+                device=dev,
+                beam=beam,
+                chunk_ms=chunk,
+                vad_mode=vad,
+                language=lang,
+                dataset_json=dataset_json,
+                concat_number=concat_number,
+                number_audio_path=number_audio_path,
+                audio_root=audio_root,
+                production_replay=production_replay,
+                **extra,
+                **extra_fixed,
+            )
+            all_cfgs.append(cfg)
+    return all_cfgs
