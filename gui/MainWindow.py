@@ -206,9 +206,6 @@ class MainWindow(QMainWindow):
         header_row = QHBoxLayout()
         table_header = ModernLabel("📊 Logged Entries", "header")
 
-        self.boat_input = BoatNameInput()
-        self.station_input = StationIdInput()
-
         self.current_specie_label = ModernLabel("🐟 Current:", style="subheader")
 
         # Replace label with SpeciesSelector (searchable dropdown with numbering + codes)
@@ -222,8 +219,6 @@ class MainWindow(QMainWindow):
         header_row.addWidget(self.species_selector)
         header_row.addStretch()
 
-        header_row.addWidget(self.station_input)
-        header_row.addWidget(self.boat_input)
         table_layout.addLayout(header_row)
 
         # Update table to show only visible columns (Date, Time, Species, Length, Trash)
@@ -381,19 +376,24 @@ class MainWindow(QMainWindow):
         logger.info(f"[parsed] species={result.species} length_cm={result.length_cm}")
 
         if result.species and result.length_cm is not None:
-            # Log and update table (newest first)
             try:
-                # Update selector
+                # Update selector visually
                 try:
                     self.species_selector.setCurrentByName(result.species)
                 except Exception:
                     pass
-                boat_name = self.boat_input.get_boat_name()
-                self.boat_input.save_boat_name()
-                station_id = self.station_input.get_station_id()
-                self.station_input.save_station_id()
+                # Retrieve boat & station from Settings widget (single source of truth)
+                boat_widget = getattr(self.settings_widget, 'boat_input', None)
+                station_widget = getattr(self.settings_widget, 'station_input', None)
+                boat_name = boat_widget.get_boat_name() if boat_widget else ""
+                if boat_widget:
+                    boat_widget.save_boat_name()
+                station_id = station_widget.get_station_id() if station_widget else ""
+                if station_widget:
+                    station_widget.save_station_id()
+                # Log
                 self.excel_logger.log_entry(result.species, result.length_cm, confidence, boat_name, station_id)
-                logger.info(f"[excel] Logged {result.species} {result.length_cm:.1f} cm conf={confidence:.2f}")
+                logger.info(f"[excel] Logged {result.species} {result.length_cm:.1f} cm conf={confidence:.2f} boat={boat_name} station={station_id}")
                 self._prepend_table_row(result.species, result.length_cm, confidence, boat_name, station_id)
                 self.statusBar().showMessage("🎣 Great catch logged successfully!", 2000)
             except Exception as e:

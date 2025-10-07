@@ -66,7 +66,31 @@ class SettingsWidget(QWidget):
         header = ModernLabel("⚙️ Settings", style="header")
         layout.addWidget(header)
 
-        # Config panel
+        # NEW: Configs panel (Station ID & Boat Name)
+        configs_panel = GlassPanel()
+        configs_layout = QVBoxLayout(configs_panel)
+        configs_layout.setContentsMargins(20, 16, 20, 16)
+        configs_layout.setSpacing(12)
+
+        configs_title = ModernLabel("🔧 Configs", style="subheader")
+        configs_layout.addWidget(configs_title)
+
+        # Import the widgets
+        from gui.widgets import StationIdInput, BoatNameInput
+        
+        # Station ID and Boat Name in the same row
+        configs_row = QHBoxLayout()
+        configs_row.setSpacing(12)
+        self.station_input = StationIdInput()
+        self.boat_input = BoatNameInput()
+        configs_row.addWidget(self.station_input)
+        configs_row.addWidget(self.boat_input)
+        configs_row.addStretch(1)
+        configs_layout.addLayout(configs_row)
+
+        layout.addWidget(configs_panel)
+
+        # Config panel (Google Sheets)
         cfg_panel = GlassPanel()
         cfg_layout = QVBoxLayout(cfg_panel)
         cfg_layout.setContentsMargins(20, 16, 20, 16)
