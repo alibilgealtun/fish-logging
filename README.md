@@ -1,74 +1,121 @@
-## Voice2FishLog
+# Voice2FishLog
 
-A Python + PyQt6 desktop application that uses the `faster-whisper` large-v2 model for real-time speech-to-text, extracts fish species and lengths, and logs them into Excel using `openpyxl`. It can run offline once the model is cached.
+A desktop application (PyQt6) for real‑time speech → structured fish log entries (species + length in cm). Supports multiple ASR backends and a reproducible numeric evaluation pipeline.
 
-### Features
-- Real-time mic transcription (offline-capable if model is downloaded)
-- Robust parsing with fuzzy species matching and unit normalization
-- Spoken-number to float conversion
-- Excel logging with cancel/undo of last entry
-- Noise evaluation script with WER measurement
+---
+## 1. Features
+- Multiple ASR engines: faster‑whisper (default), whisperx, vosk, (optional) Google Cloud
+- Real‑time segmentation (NoiseController + WebRTC VAD)
+- Robust normalization (numbers, units, species spelling variants)
+- FishParser: extract species + length (cm) from free speech
+- Optional number prefix (number.wav) to prime numeric recognition
+- Undo / remove last entry, session & Excel logging
+- Offline capable once models cached
 
-### Setup
-1. Install Python 3.10+
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. (Optional) Pre-download the Whisper `large-v2` model to run fully offline. It will be cached on first run in `~/.cache`.
+---
+## 2. Installation
+```bash
+python -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+(First run will download required ASR model weights into user cache.)
 
-### Run
+---
+## 3. Quick Start
 ```bash
 python main.py
 ```
+Speak e.g. “salmon twenty three point five” → UI shows a normalized entry (species + length cm) → save / undo.
 
-### Excel Log
-- File: `logs.xlsx`
-- Columns: Date | Time | Species | Length (cm) | Confidence
+---
+## 4. Configuration Files (config/)
+| File | Purpose |
+|------|---------|
+| species.json | Species lexicon + fuzzy aliases |
+| numbers.json | Spoken number variants / mapping |
+| units.json | Unit variants (cm, centimeter, santim, etc.) |
+| asr_corrections.json | Post‑ASR correction pairs |
+| google_sheets.json | Optional Sheets backup credentials/IDs |
 
-### Noise Evaluation
-- Put noisy `.wav` files and references in `samples/`.
-- Create `samples/refs.txt` with lines in the form: `filename.wav|reference text`.
-- Run:
-  ```bash
-  python noise_eval.py
-  ```
+---
+## 5. ASR Engines
+Engine selection is handled by `speech/factory.py`.
 
-### Notes
-- Windows 10/11 primary target; Linux supported
-- If your microphone is not the default input, set it in Windows Sound settings or modify `speech.py` to choose a device.
+### faster‑whisper
+Default engine. Model size / precision defined in recognizer class constants.
 
-# Fish Logging
+### whisperx / vosk / google
+Additional recognizers live under `speech/`. For Google Cloud:
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/key.json
+```
+(Ensure the Speech‑to‑Text API is enabled and service account has permission.)
 
-This application supports multiple speech-to-text engines optimized for fish species and measurements.
+---
+## 6. Processing Pipeline (Live)
+1. Microphone audio buffered in CHUNK_S frames
+2. NoiseController + WebRTC VAD produce segments (with padding)
+3. (Optional) number prefix prepended
+4. Segment sent to selected ASR backend
+5. Text normalized + corrections applied
+6. FishParser extracts species + length
+7. Entry rendered & logged
 
-## Engines
-- Whisper (default)
-- Vosk
-- Google Cloud Speech-to-Text (new)
+Recognizer constants (e.g. VAD_MODE, MIN_SPEECH_S, MAX_SEGMENT_S, PADDING_MS) tune segmentation behavior.
 
-## Google Cloud Speech-to-Text
+---
+## 7. Logging
+- Session / Excel logs under `logs/`
+- Undo removes last accepted measurement
+- (Optionally) integrate Google Sheets via service credentials
 
-1) Enable API and create credentials
-- In Google Cloud Console, enable “Cloud Speech-to-Text API”.
-- Create a Service Account with role: Speech-to-Text User.
-- Create a JSON key and download it.
+---
+## 8. Parsing & Normalization
+- Corrections (asr_corrections.json) → canonical text
+- Number + unit normalization (numbers.json, units.json)
+- FishParser resolves final (species, length_cm)
+- Display formatting: `<species> <value> cm`
 
-2) Provide credentials
-- Option A: Set the environment variable
-  - macOS/Linux:
-    export GOOGLE_APPLICATION_CREDENTIALS="/absolute/path/to/key.json"
-  - Windows (PowerShell):
-    $env:GOOGLE_APPLICATION_CREDENTIALS="C:\\path\\to\\key.json"
-- Option B: Place the key file at the project root named google.json (auto-detected).
+---
+## 9. Performance Tips
+| Goal | Tip |
+|------|-----|
+| Faster CPU inference | Use smaller model (tiny/tiny.en/base.en) & int8 compute |
+| Better accuracy | Increase beam size or choose larger model |
+| Lower latency | Reduce CHUNK_S & aggressive VAD (trade segmentation) |
+| GPU boost | Use whisperx or faster‑whisper with CUDA device |
 
-3) Install dependencies
-pip install -r requirements.txt
+---
+## 10. Evaluation & Testing
+A dedicated, reproducible evaluation pipeline (numeric accuracy, latency, segmentation realism) lives in `evaluation/`.
 
-4) Run with Google engine
-python main.py --model=google
+👉 See: `evaluation/README_TEST_EVAL.md` (test & evaluation guide).
 
-Notes
-- The recognizer uses phrase hints from config/species.json, config/numbers.json, and config/units.json to bias recognition.
-- Real-time mode uses a noise controller and voice activity detection to segment audio and sends short segments to Google for recognition.
-- Use commands “wait” and “start” to pause/resume parsing.
+Key points:
+- Central config: `evaluation/presets/model_specs.json` (single source of models, dataset, flags)
+- Per‑run artifacts in timestamped subfolders under `evaluation_outputs/`
+- Production replay mode emulates live segmentation path
+
+---
+## 11. Extending
+| Task | Steps |
+|------|-------|
+| Add new ASR engine | Create recognizer (inherits BaseSpeechRecognizer) + register in `speech/factory.py` |
+| Add metric / column (eval) | Insert into row dict in `evaluation/pipeline.py` and extend summary aggregation if needed |
+| New species / aliases | Update species.json + corrections if required |
+| Additional language | Supply language code + extend numbers/units mapping |
+
+---
+## 12. Troubleshooting
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| GUI fails to start | PyQt not installed | Reinstall requirements |
+| Slow decoding | Large model on CPU | Switch to base/tiny + int8 |
+| Species missing | Not in species.json | Add alias / base name |
+| Wrong number | Prefix missing / segmentation | Provide number.wav or adjust VAD_MODE |
+| No segments | VAD too strict | Lower VAD aggressiveness or MIN_SPEECH_S |
+
+
+---
+For deep dive into metrics & automated benchmarks: open `evaluation/README_TEST_EVAL.md`.
