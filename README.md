@@ -65,6 +65,13 @@ export GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/key.json
 
 Recognizer constants (e.g. VAD_MODE, MIN_SPEECH_S, MAX_SEGMENT_S, PADDING_MS) tune segmentation behavior.
 
+### Audio Segment Saving
+For debugging or analysis, you can save audio segments before transcription:
+```bash
+python main.py --save-audio
+```
+Segments are saved to `audio/segments/` as `segment_YYYYMMDD_HHMM_NNNN.wav` (16kHz mono PCM_16). Disabled by default to preserve disk space.
+
 ---
 ## 6.1 Noise Profiles (Adaptive Acoustic Modes)
 The app supports selectable noise profiles to optimize speech segmentation and suppression in different environments. You can change the active profile any time in the Settings tab (⚙️) via the “Noise Profile” dropdown. Switching restarts the recognizer with new parameters.

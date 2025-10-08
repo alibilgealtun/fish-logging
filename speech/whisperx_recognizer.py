@@ -15,6 +15,7 @@ from PyQt6.QtCore import pyqtSignal
 from .base_recognizer import BaseSpeechRecognizer
 from noise.controller import NoiseController
 from parser import ParserResult
+from services import get_audio_saver
 
 # Attempt to import whisperx in a defensive way
 _try_whisperx = True
@@ -292,6 +293,10 @@ class WhisperXRecognizer(BaseSpeechRecognizer):
                     # combine number sound with the current segment
                     combined_segment = np.concatenate((self._number_sound, segment))
                     wav_path = self._write_wav_bytes(combined_segment, self.SAMPLE_RATE)
+
+                    # Save the audio segment to file (for debugging/inspection)
+                    audio_saver = get_audio_saver()
+                    audio_saver.save_segment(combined_segment, self.SAMPLE_RATE)
 
                     # Transcription with whisperx - many versions return dict with "segments" key
                     try:

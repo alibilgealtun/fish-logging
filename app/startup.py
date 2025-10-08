@@ -8,6 +8,7 @@ from loguru import logger
 from app.application import Application
 from config.config import parse_app_args
 from speech.factory import create_recognizer
+from services import initialize_audio_saver
 
 
 def run_application() -> None:
@@ -15,6 +16,12 @@ def run_application() -> None:
     # Parse configuration
     config, unknown_args = parse_app_args(sys.argv[1:])
     
+    # Initialize audio saver service
+    initialize_audio_saver(
+        segments_dir=config.audio.segments_dir,
+        enabled=config.audio.save_segments
+    )
+
     # Create recognizer with fallback, including noise profile selection
     recognizer = _create_recognizer_with_fallback(
         config.speech.engine,

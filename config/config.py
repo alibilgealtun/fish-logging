@@ -35,6 +35,13 @@ class DatabaseConfig:
 
 
 @dataclass(frozen=True)
+class AudioConfig:
+    """Audio storage configuration."""
+    segments_dir: str = "audio/segments"
+    save_segments: bool = False  # Enable/disable saving audio segments
+
+
+@dataclass(frozen=True)
 class UIConfig:
     """User interface configuration."""
     theme: str = "default"
@@ -47,6 +54,7 @@ class AppConfig:
     """Complete application configuration."""
     speech: SpeechConfig
     database: DatabaseConfig
+    audio: AudioConfig
     ui: UIConfig
 
     # Loaded from JSON files
@@ -100,6 +108,10 @@ class ConfigLoader:
                 "excel_output_path": "logs/hauls/logs.xlsx",
                 "session_log_dir": "logs/sessions",
                 "backup_enabled": True,
+            },
+            "audio": {
+                "segments_dir": "audio/segments",
+                "save_segments": False,
             },
             "ui": {
                 "theme": "default",
@@ -203,6 +215,11 @@ class ConfigLoader:
             choices=["DEBUG", "INFO", "WARNING", "ERROR"],
             help="Set logging level"
         )
+        parser.add_argument(
+            "--save-audio",
+            action="store_true",
+            help="Save audio segments to disk for debugging/analysis"
+        )
 
         known, unknown = parser.parse_known_args(argv)
 
@@ -223,6 +240,10 @@ class ConfigLoader:
             overrides["debug"] = True
         if known.log_level:
             overrides["log_level"] = known.log_level
+        if known.save_audio:
+            audio_overrides = overrides.setdefault("audio", {})
+            if isinstance(audio_overrides, dict):
+                audio_overrides["save_segments"] = True
 
         return overrides, unknown
 
@@ -231,12 +252,14 @@ class ConfigLoader:
         # Extract nested configs
         speech_config = SpeechConfig(**config_dict.get("speech", {}))
         database_config = DatabaseConfig(**config_dict.get("database", {}))
+        audio_config = AudioConfig(**config_dict.get("audio", {}))
         ui_config = UIConfig(**config_dict.get("ui", {}))
 
         # Build main config
         return AppConfig(
             speech=speech_config,
             database=database_config,
+            audio=audio_config,
             ui=ui_config,
             asr_corrections=config_dict.get("asr_corrections", {}),
             species_data=config_dict.get("species_data", {}),
@@ -276,4 +299,4 @@ def parse_app_args(argv: List[str]) -> Tuple[AppConfig, List[str]]:
     return loader.load(argv)
 
 
-__all__ = ["AppConfig", "SpeechConfig", "DatabaseConfig", "UIConfig", "ConfigLoader", "parse_app_args"]
+__all__ = ["AppConfig", "SpeechConfig", "DatabaseConfig", "AudioConfig", "UIConfig", "ConfigLoader", "parse_app_args"]

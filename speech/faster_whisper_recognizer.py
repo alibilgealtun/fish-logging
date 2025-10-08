@@ -13,6 +13,7 @@ from .base_recognizer import BaseSpeechRecognizer
 from noise.controller import NoiseController
 from parser import ParserResult
 import soundfile as sf
+from services import get_audio_saver
 
 
 @dataclass
@@ -311,6 +312,10 @@ class WhisperRecognizer(BaseSpeechRecognizer):
                     combined_segment = np.concatenate((self._number_sound, segment))
                     # Write segment to temporary file
                     wav_path = self._write_wav_bytes(combined_segment, self.SAMPLE_RATE)
+
+                    # Save the audio segment to file (for debugging/inspection)
+                    audio_saver = get_audio_saver()
+                    audio_saver.save_segment(combined_segment, self.SAMPLE_RATE)
 
                     try:
                         assert self._model is not None

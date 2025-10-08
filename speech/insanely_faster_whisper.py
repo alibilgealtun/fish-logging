@@ -15,6 +15,7 @@ from PyQt6.QtCore import pyqtSignal
 from .base_recognizer import BaseSpeechRecognizer
 from noise.controller import NoiseController
 from parser import ParserResult
+from services import get_audio_saver
 
 # Defensive import for insanely-fast-whisper
 _try_ifw = True
@@ -262,6 +263,10 @@ class InsanelyFastWhisperRecognizer(BaseSpeechRecognizer):
 
                     combined = np.concatenate((self._number_sound, segment))
                     wav_path = self._write_wav_bytes(combined, self.SAMPLE_RATE)
+
+                    # Save the audio segment to file (for debugging/inspection)
+                    audio_saver = get_audio_saver()
+                    audio_saver.save_segment(combined, self.SAMPLE_RATE)
 
                     try:
                         result = self._model.transcribe(
