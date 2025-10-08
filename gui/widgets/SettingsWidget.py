@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
+import json
 
 from PyQt6.QtWidgets import (
     QWidget,
@@ -11,6 +12,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QInputDialog,
+    QComboBox,
 )
 from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt
 from PyQt6.QtGui import QCursor
@@ -49,14 +51,18 @@ class _BackupWorker(QObject):
 
 
 class SettingsWidget(QWidget):
+    noiseProfileChanged = pyqtSignal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._svc = GoogleSheetsBackup()
         self._cfg: Optional[GoogleSheetsConfig] = self._svc.load_config()
         self._thread: Optional[QThread] = None
         self._worker: Optional[_BackupWorker] = None
+        self._user_settings_path = Path("config/user_settings.json")
         self._build_ui()
         self._refresh_config_labels()
+        self._load_saved_noise_profile()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -77,7 +83,7 @@ class SettingsWidget(QWidget):
 
         # Import the widgets
         from gui.widgets import StationIdInput, BoatNameInput
-        
+
         # Station ID and Boat Name in the same row
         configs_row = QHBoxLayout()
         configs_row.setSpacing(12)
@@ -87,6 +93,22 @@ class SettingsWidget(QWidget):
         configs_row.addWidget(self.boat_input)
         configs_row.addStretch(1)
         configs_layout.addLayout(configs_row)
+
+        # Noise profile selector row
+        profile_row = QHBoxLayout()
+        profile_label = ModernLabel("Noise Profile:", style="subheader")
+        self.noise_profile_combo = QComboBox()
+        self.noise_profile_combo.addItem("Mixed (human + engine)", "mixed")
+        self.noise_profile_combo.addItem("Human Voices", "human")
+        self.noise_profile_combo.addItem("Engine Noise", "engine")
+        self.noise_profile_combo.addItem("Clean / Quiet", "clean")
+        self.noise_profile_combo.setCurrentIndex(0)
+        self.noise_profile_combo.setToolTip("Select acoustic environment to adapt VAD & suppression")
+        self.noise_profile_combo.currentIndexChanged.connect(self._on_noise_profile_changed)
+        profile_row.addWidget(profile_label)
+        profile_row.addWidget(self.noise_profile_combo)
+        profile_row.addStretch(1)
+        configs_layout.addLayout(profile_row)
 
         layout.addWidget(configs_panel)
 
@@ -310,3 +332,42 @@ class SettingsWidget(QWidget):
             "- If backup fails, ensure the sheet is shared with the service account.\n"
         )
         QMessageBox.information(self, "How to set up Google Sheets Backup", steps)
+
+    def _load_saved_noise_profile(self) -> None:
+        """Load and apply last saved noise profile from user_settings.json."""
+        try:
+            if self._user_settings_path.exists():
+                with open(self._user_settings_path, 'r') as f:
+                    settings = json.load(f)
+                saved_profile = settings.get("noise_profile", "mixed")
+                # Find and select the matching item
+                for i in range(self.noise_profile_combo.count()):
+                    if self.noise_profile_combo.itemData(i) == saved_profile:
+                        self.noise_profile_combo.setCurrentIndex(i)
+                        break
+        except Exception as e:
+            logger.debug(f"Could not load saved noise profile: {e}")
+
+    def _save_noise_profile(self, profile_key: str) -> None:
+        """Persist the selected noise profile to user_settings.json."""
+        try:
+            settings = {}
+            if self._user_settings_path.exists():
+                with open(self._user_settings_path, 'r') as f:
+                    settings = json.load(f)
+            settings["noise_profile"] = profile_key
+            self._user_settings_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._user_settings_path, 'w') as f:
+                json.dump(settings, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save noise profile: {e}")
+
+    def _on_noise_profile_changed(self, idx: int) -> None:
+        try:
+            key = self.noise_profile_combo.currentData()
+            if isinstance(key, str):
+                self._save_noise_profile(key)
+                self.noiseProfileChanged.emit(key)
+                logger.info(f"Noise profile changed to {key}")
+        except Exception as e:
+            logger.error(f"Failed to emit noise profile change: {e}")

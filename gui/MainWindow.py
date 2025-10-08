@@ -25,6 +25,7 @@ from parser import FishParser
 from .widgets import *
 from .widgets.ReportWidget import ReportWidget
 from .widgets.SettingsWidget import SettingsWidget
+from speech.factory import create_recognizer
 
 
 class MainWindow(QMainWindow):
@@ -40,6 +41,11 @@ class MainWindow(QMainWindow):
         self._setup_modern_theme()
         self._setup_ui()
         self._connect_signals()
+        # Listen to noise profile changes
+        try:
+            self.settings_widget.noiseProfileChanged.connect(self._on_noise_profile_changed)
+        except Exception:
+            pass
 
         # Start listening immediately (clean restart-friendly)
         if not self.speech_recognizer.isRunning():
@@ -560,3 +566,40 @@ class MainWindow(QMainWindow):
             }
         """)
         msg_box.exec()
+
+    def _on_noise_profile_changed(self, profile_key: str) -> None:
+        """Recreate recognizer with the selected noise profile preserving engine & numbers_only."""
+        try:
+            # Infer engine from existing recognizer class
+            cls_name = self.speech_recognizer.__class__.__name__.lower()
+            if "whisperx" in cls_name:
+                engine = "whisperx"
+            elif "vosk" in cls_name:
+                engine = "vosk"
+            elif "google" in cls_name:
+                engine = "google"
+            else:
+                engine = "whisper"
+            numbers_only = bool(getattr(self.speech_recognizer, "numbers_only", False))
+            # Stop current recognizer
+            try:
+                self.speech_recognizer.stop()
+            except Exception:
+                pass
+            # Create new recognizer instance with updated profile
+            new_recognizer = create_recognizer(engine, numbers_only=numbers_only, noise_profile=profile_key)
+            self.speech_recognizer = new_recognizer
+            self._connect_signals()
+            # Start it
+            if hasattr(self.speech_recognizer, "begin"):
+                self.speech_recognizer.begin()
+            else:
+                self.speech_recognizer.start()
+            self.statusBar().showMessage(f"Noise profile set to '{profile_key}'. Listening…")
+        except Exception as e:
+            self.statusBar().showMessage("Failed to switch noise profile")
+            try:
+                logger.error(f"Noise profile switch failed: {e}")
+            except Exception:
+                pass
+

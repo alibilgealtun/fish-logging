@@ -17,10 +17,13 @@ class SpeechConfig:
     numbers_only: bool
     model_path: Optional[str] = None
     language: str = "en"
+    noise_profile: str = "mixed"  # clean | human | engine | mixed
 
     def __post_init__(self):
         if self.engine not in ("whisper", "whisperx", "vosk", "google"):
             raise ValueError(f"Invalid engine: {self.engine}")
+        if self.noise_profile not in {"clean", "human", "engine", "mixed"}:
+            raise ValueError(f"Invalid noise_profile: {self.noise_profile}")
 
 
 @dataclass(frozen=True)
@@ -91,6 +94,7 @@ class ConfigLoader:
                 "engine": "whisper",
                 "numbers_only": False,
                 "language": "en",
+                "noise_profile": "mixed",
             },
             "database": {
                 "excel_output_path": "logs/hauls/logs.xlsx",
@@ -154,6 +158,12 @@ class ConfigLoader:
             if isinstance(speech_overrides, dict):
                 speech_overrides["language"] = speech_language
 
+        noise_profile = os.getenv("SPEECH_NOISE_PROFILE")
+        if noise_profile:
+            speech_overrides = overrides.setdefault("speech", {})
+            if isinstance(speech_overrides, dict):
+                speech_overrides["noise_profile"] = noise_profile
+
         # Debug and logging
         if self._env_bool("DEBUG"):
             overrides["debug"] = True
@@ -179,6 +189,11 @@ class ConfigLoader:
             help="Enable numbers-only mode"
         )
         parser.add_argument(
+            "--noise-profile",
+            choices=["clean", "human", "engine", "mixed"],
+            help="Noise environment profile (defaults to mixed)"
+        )
+        parser.add_argument(
             "--debug",
             action="store_true",
             help="Enable debug mode"
@@ -200,6 +215,10 @@ class ConfigLoader:
             speech_overrides = overrides.setdefault("speech", {})
             if isinstance(speech_overrides, dict):
                 speech_overrides["numbers_only"] = True
+        if known.noise_profile:
+            speech_overrides = overrides.setdefault("speech", {})
+            if isinstance(speech_overrides, dict):
+                speech_overrides["noise_profile"] = known.noise_profile
         if known.debug:
             overrides["debug"] = True
         if known.log_level:

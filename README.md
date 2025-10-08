@@ -11,6 +11,7 @@ A desktop application (PyQt6) for real‑time speech → structured fish log ent
 - Optional number prefix (number.wav) to prime numeric recognition
 - Undo / remove last entry, session & Excel logging
 - Offline capable once models cached
+- Selectable noise profiles (clean / human / engine / mixed) to adapt suppression & VAD
 
 ---
 ## 2. Installation
@@ -65,6 +66,31 @@ export GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/key.json
 Recognizer constants (e.g. VAD_MODE, MIN_SPEECH_S, MAX_SEGMENT_S, PADDING_MS) tune segmentation behavior.
 
 ---
+## 6.1 Noise Profiles (Adaptive Acoustic Modes)
+The app supports selectable noise profiles to optimize speech segmentation and suppression in different environments. You can change the active profile any time in the Settings tab (⚙️) via the “Noise Profile” dropdown. Switching restarts the recognizer with new parameters.
+
+| Profile | Intended Environment | Key Changes |
+|---------|----------------------|-------------|
+| Mixed (default) | General use (both human chatter + some engine) | Balanced VAD (mode 2), moderate suppression |
+| Human Voices | Background conversations / crew talk | Slightly lower min segment, higher speech band boost |
+| Engine Noise | Steady engine / mechanical hum | More aggressive VAD (mode 3), slower noise adaptation, stronger gate |
+| Clean / Quiet | Calm cabin / near‑silent room | Less aggressive VAD (mode 1), gentler suppression, faster segment close |
+
+Internals per profile (see `speech/noise_profiles.py`):
+- Adjusts: VAD_MODE, MIN_SPEECH_S, MAX_SEGMENT_S, PADDING_MS
+- Builds a tailored `SuppressorConfig` (gain_floor, noise_update_alpha, speech_band_boost, gate settings).
+
+CLI / environment usage:
+```bash
+python main.py --noise-profile engine
+# or
+export SPEECH_NOISE_PROFILE=human
+python main.py
+```
+
+If unsure, keep “Mixed”. Use “Engine Noise” only when low‑frequency drone dominates; use “Human Voices” when overlapping crew speech causes false merges. “Clean” minimizes latency in quiet spaces.
+
+---
 ## 7. Logging
 - Session / Excel logs under `logs/`
 - Undo removes last accepted measurement
@@ -115,7 +141,6 @@ Key points:
 | Species missing | Not in species.json | Add alias / base name |
 | Wrong number | Prefix missing / segmentation | Provide number.wav or adjust VAD_MODE |
 | No segments | VAD too strict | Lower VAD aggressiveness or MIN_SPEECH_S |
-
 
 ---
 For deep dive into metrics & automated benchmarks: open `evaluation/README_TEST_EVAL.md`.
