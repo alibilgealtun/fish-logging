@@ -64,3 +64,17 @@ class BaseSpeechRecognizer(QThread):
         """Resumes transcription."""
         self._paused = False
         self.status_changed.emit("listening")
+
+    def __del__(self):  # Best-effort safeguard to avoid abort on interpreter shutdown
+        try:
+            if getattr(self, 'isRunning', lambda: False)():
+                try:
+                    self.stop()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                try:
+                    self.wait(2000)
+                except Exception:
+                    pass
+        except Exception:
+            pass

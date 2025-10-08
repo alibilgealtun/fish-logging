@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QComboBox,
 )
-from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt
+from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt, QTimer
 from PyQt6.QtGui import QCursor
 
 # Optional logger: prefer loguru if available, else fallback to stdlib logging
@@ -60,9 +60,17 @@ class SettingsWidget(QWidget):
         self._thread: Optional[QThread] = None
         self._worker: Optional[_BackupWorker] = None
         self._user_settings_path = Path("config/user_settings.json")
+        # Suppress auto-emission of noise profile change during initial widget setup
+        self._suppress_profile_signal: bool = True
         self._build_ui()
         self._refresh_config_labels()
         self._load_saved_noise_profile()
+        # Re-enable emission after event loop starts to ensure recognizer is fully initialized
+        QTimer.singleShot(0, self._enable_profile_signal)
+
+    def _enable_profile_signal(self) -> None:
+        # Allow future user-driven noise profile changes to emit
+        self._suppress_profile_signal = False
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -340,10 +348,11 @@ class SettingsWidget(QWidget):
                 with open(self._user_settings_path, 'r') as f:
                     settings = json.load(f)
                 saved_profile = settings.get("noise_profile", "mixed")
-                # Find and select the matching item
+                # Find and select the matching item WITHOUT emitting (suppressed by flag)
                 for i in range(self.noise_profile_combo.count()):
                     if self.noise_profile_combo.itemData(i) == saved_profile:
-                        self.noise_profile_combo.setCurrentIndex(i)
+                        if i != self.noise_profile_combo.currentIndex():
+                            self.noise_profile_combo.setCurrentIndex(i)
                         break
         except Exception as e:
             logger.debug(f"Could not load saved noise profile: {e}")
@@ -364,6 +373,8 @@ class SettingsWidget(QWidget):
 
     def _on_noise_profile_changed(self, idx: int) -> None:
         try:
+            if self._suppress_profile_signal:
+                return  # Ignore programmatic changes during initialization
             key = self.noise_profile_combo.currentData()
             if isinstance(key, str):
                 self._save_noise_profile(key)
