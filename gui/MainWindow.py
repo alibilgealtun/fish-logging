@@ -73,6 +73,46 @@ class MainWindow(QMainWindow):
                 font-weight: 500;
                 padding: 8px;
             }
+            QTabWidget::pane {
+                border: 2px solid rgba(255, 255, 255, 0.15);
+                border-radius: 12px;
+                background: rgba(0, 0, 0, 0.35);
+                top: -2px;
+            }
+            QTabBar::tab {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(0, 0, 0, 0.4),
+                    stop:1 rgba(0, 0, 0, 0.5));
+                border: 2px solid rgba(255, 255, 255, 0.2);
+                border-bottom: none;
+                border-top-left-radius: 12px;
+                border-top-right-radius: 12px;
+                padding: 18px 32px;
+                margin-right: 6px;
+                color: rgba(255, 255, 255, 0.9);
+                font-size: 16px;
+                font-weight: 600;
+                min-width: 160px;
+            }
+            QTabBar::tab:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(255, 255, 255, 0.2),
+                    stop:1 rgba(255, 255, 255, 0.15));
+                border: 2px solid rgba(255, 255, 255, 0.35);
+                color: white;
+            }
+            QTabBar::tab:selected {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(100, 180, 255, 0.5),
+                    stop:1 rgba(80, 150, 255, 0.4));
+                border: 2px solid rgba(100, 200, 255, 0.6);
+                color: white;
+                font-weight: 700;
+                padding: 20px 36px;
+            }
+            QTabBar::tab:!selected {
+                margin-top: 4px;
+            }
         """)
 
     def _setup_background(self) -> None:

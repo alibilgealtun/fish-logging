@@ -25,7 +25,7 @@ class ModernLabel(QLabel):
         elif style == "subheader":
             self.setStyleSheet("""
                 ModernLabel {
-                    color: #34495e;
+                    color: #ffffff;
                     font-family: 'Segoe UI', system-ui, sans-serif;
                     font-size: 16px;
                     font-weight: 600;
@@ -41,4 +41,3 @@ class ModernLabel(QLabel):
                     font-weight: 500;
                 }
             """)
-

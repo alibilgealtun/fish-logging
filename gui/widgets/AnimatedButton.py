@@ -38,19 +38,19 @@ class AnimatedButton(QPushButton):
                 "normal": ("#34d399", "#059669"),  # emerald
                 "hover": ("#6ee7b7", "#10b981"),
                 "pressed": ("#2fb37f", "#047857"),
-                "text": "#0b1f16",
+                "text": "#ffffff",
             },
             "warning": {
                 "normal": ("#f59e0b", "#d97706"),  # amber
                 "hover": ("#fbbf24", "#f59e0b"),
                 "pressed": ("#d97706", "#b45309"),
-                "text": "#1f1300",
+                "text": "#ffffff",
             },
             "info": {
                 "normal": ("#60a5fa", "#3b82f6"),  # blue
                 "hover": ("#93c5fd", "#60a5fa"),
                 "pressed": ("#3b82f6", "#2563eb"),
-                "text": "#0b1220",
+                "text": "#ffffff",
             },
             "danger": {
                 "normal": ("#ff6b6b", "#ee5a52"),

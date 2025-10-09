@@ -383,6 +383,26 @@ class LengthDistributionReportGenerator:
             except Exception:
                 # Skip any chart that fails to render
                 continue
+
+        # Add individual length distribution charts for each species
+        try:
+            species_list = sorted(df["Species"].unique())
+            for species in species_list:
+                try:
+                    fig = self.create_species_length_chart(df, species)
+                    figs.append(fig)
+                except Exception as e:
+                    # Log but continue if one species chart fails
+                    try:
+                        from loguru import logger  # type: ignore
+                        logger.warning(f"Failed to create chart for species {species}: {e}")
+                    except Exception:
+                        pass
+                    continue
+        except Exception:
+            # If species iteration fails entirely, skip this section
+            pass
+
         return figs
 
     # Orchestration

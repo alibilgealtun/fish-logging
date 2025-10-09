@@ -106,7 +106,7 @@ class SettingsWidget(QWidget):
         cfg_layout.setContentsMargins(20, 16, 20, 16)
         cfg_layout.setSpacing(8)
 
-        cfg_title = ModernLabel("Backup - Google Sheets Configuration", style="subheader")
+        cfg_title = ModernLabel("💾 Backup - Google Sheets Configuration", style="subheader")
         cfg_layout.addWidget(cfg_title)
 
         self.lbl_credentials = QLabel()
