@@ -300,6 +300,7 @@ class InsanelyFastWhisperRecognizer(BaseSpeechRecognizer):
             return
 
         with self._stream:
+            logger.info(f"Recording with noise control (IFW)... Press Stop to end. [profile={self._noise_profile_name}]")
             self.partial_text.emit("Listening…")
             self._emit_status_once("listening")
             segment_generator = self._noise_controller.collect_segments(padding_ms=self.PADDING_MS)

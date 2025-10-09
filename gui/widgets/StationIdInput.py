@@ -17,6 +17,7 @@ class StationIdInput(QWidget):
         layout.setSpacing(6)
 
         label = QLabel("📍 Station:")
+        label.setStyleSheet("QLabel { color: white; }")
         self.edit = QLineEdit()
         self.edit.setPlaceholderText("Enter station ID…")
         self.edit.setMinimumHeight(36)
@@ -56,4 +57,3 @@ class StationIdInput(QWidget):
         w = self.window()
         if isinstance(w, QWidget):
             w.setFocus()
-

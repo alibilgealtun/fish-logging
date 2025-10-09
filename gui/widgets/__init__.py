@@ -8,6 +8,7 @@ from .BoatNameInput import BoatNameInput
 from .SpeciesSelector import SpeciesSelector
 from .StationIdInput import StationIdInput
 from .SettingsWidget import SettingsWidget
+from .NoiseProfileInput import NoiseProfileInput
 
 __all__ = [
     'AnimatedButton',
@@ -20,4 +21,5 @@ __all__ = [
     'SpeciesSelector',
     'StationIdInput',
     'SettingsWidget',
+    'NoiseProfileInput',
 ]

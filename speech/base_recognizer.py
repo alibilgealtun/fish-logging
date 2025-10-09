@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QThread, pyqtSignal
+from typing import Optional
 
 class BaseSpeechRecognizer(QThread):
     """
@@ -32,6 +33,7 @@ class BaseSpeechRecognizer(QThread):
         self._stop_flag = False
         self._paused = False
         self._last_fish_specie = None
+        # Optional: child classes may also define _noise_profile_name
         self.language = language
 
     def run(self) -> None:
@@ -69,6 +71,17 @@ class BaseSpeechRecognizer(QThread):
         """Resumes transcription."""
         self._paused = False
         self.status_changed.emit("listening")
+
+    # ---- Helpers for UI integration ----
+    def set_last_species(self, name: Optional[str]) -> None:
+        """Set last detected/current species to use when only numbers are spoken."""
+        self._last_fish_specie = name or None
+
+    def set_noise_profile(self, name: Optional[str]) -> None:
+        """Set the noise profile hint. Concrete recognizers may override to re-init noise controller."""
+        # Default only stores the name if child set the attribute
+        if hasattr(self, "_noise_profile_name"):
+            setattr(self, "_noise_profile_name", (name or "mixed").lower())
 
     def __del__(self):  # Best-effort safeguard to avoid abort on interpreter shutdown
         try:

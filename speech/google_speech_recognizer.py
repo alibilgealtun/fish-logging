@@ -359,8 +359,11 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
         )
 
         with self._stream:
-            logger.info("Recording with noise control (Google STT)... Press Stop to end.")
-            self.partial_text.emit("Listening…")
+            logger.info(f"Recording with noise control (Google STT)... Press Stop to end. [profile={self._noise_profile_name}]")
+            try:
+                self.partial_text.emit("Listening…")
+            except Exception:
+                pass
             self._emit_status_once("listening")
 
             segment_generator = self._noise_controller.collect_segments(

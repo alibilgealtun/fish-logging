@@ -25,7 +25,6 @@ from parser import FishParser
 from .widgets import *
 from .widgets.ReportWidget import ReportWidget
 from .widgets.SettingsWidget import SettingsWidget
-from speech.factory import create_recognizer
 
 
 class MainWindow(QMainWindow):
@@ -41,49 +40,6 @@ class MainWindow(QMainWindow):
         self._setup_modern_theme()
         self._setup_ui()
         self._connect_signals()
-        # Listen to noise profile changes
-        try:
-            self.settings_widget.noiseProfileChanged.connect(self._on_noise_profile_changed)
-        except Exception:
-            pass
-
-        # If the settings widget selected profile differs from recognizer's internal profile
-        # and the recognizer thread has NOT started yet, recreate it safely now (no stop needed).
-        try:
-            selected_profile = None
-            try:
-                selected_profile = self.settings_widget.noise_profile_combo.currentData()
-            except Exception:
-                pass
-            current_profile = getattr(self.speech_recognizer, "_noise_profile_name", None)
-            if (
-                selected_profile
-                and isinstance(selected_profile, str)
-                and selected_profile != current_profile
-                and not self.speech_recognizer.isRunning()
-            ):
-                cls_name = self.speech_recognizer.__class__.__name__.lower()
-                if "whisperx" in cls_name:
-                    engine = "whisperx"
-                elif "vosk" in cls_name:
-                    engine = "vosk"
-                elif "google" in cls_name:
-                    engine = "google"
-                else:
-                    engine = "whisper"
-                numbers_only = bool(getattr(self.speech_recognizer, "numbers_only", False))
-                logger.debug(
-                    f"Recreating recognizer pre-start for saved profile '{selected_profile}' (was '{current_profile}')"
-                )
-                self.speech_recognizer = create_recognizer(
-                    engine,
-                    numbers_only=numbers_only,
-                    noise_profile=selected_profile,
-                )
-                # Reconnect signals to new instance
-                self._connect_signals()
-        except Exception as e:
-            logger.debug(f"Pre-start profile reconciliation skipped: {e}")
 
         # Start listening immediately (clean restart-friendly)
         if not self.speech_recognizer.isRunning():
@@ -199,11 +155,41 @@ class MainWindow(QMainWindow):
         self.btn_stop.clicked.connect(self._on_stop)
         self.btn_start.clicked.connect(self._on_start)
 
+        # React to noise profile changes from Settings
+        try:
+            self.settings_widget.noiseProfileChanged.connect(self._on_noise_profile_changed)
+        except Exception:
+            pass
+
+    def _on_noise_profile_changed(self, profile_key: str) -> None:
+        """Apply noise profile by stopping recognizer, updating, and restarting if on logging tab."""
+        try:
+            is_logging_tab = (self.tabs.currentWidget() is self.logging_tab)
+        except Exception:
+            is_logging_tab = True
+        try:
+            # Stop to rebuild noise controller safely
+            self._on_stop()
+            if hasattr(self.speech_recognizer, 'set_noise_profile'):
+                self.speech_recognizer.set_noise_profile(profile_key)
+            self.statusBar().showMessage(f"🔊 Noise profile set to {profile_key}")
+        finally:
+            # Restart only if user is on logging tab
+            if is_logging_tab:
+                self._on_start()
+
     def _on_tab_changed(self, index: int) -> None:
-        """Pause recognizer on non-logging tabs; render default chart in Reports."""
+        """Pause recognizer on non-logging tabs; render default chart in Reports. When returning, sync current species."""
         try:
             widget = self.tabs.widget(index)
             if widget is self.logging_tab:
+                # Sync current species to recognizer to avoid "None" on numbers-only utterances
+                try:
+                    cur = self.species_selector.currentSpecies()
+                    if cur and hasattr(self.speech_recognizer, 'set_last_species'):
+                        self.speech_recognizer.set_last_species(cur)
+                except Exception:
+                    pass
                 # Returning to Fish Logging -> start listening
                 self._on_start()
             else:
@@ -573,29 +559,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         try:
-            # Request cooperative shutdown first
-            try:
-                if hasattr(self.speech_recognizer, 'requestInterruption'):
-                    self.speech_recognizer.requestInterruption()
-            except Exception:
-                pass
             self.speech_recognizer.stop()
-            # Wait for the recognizer thread to finish before closing
-            if self.speech_recognizer.isRunning():
-                finished = self.speech_recognizer.wait(6000)  # Wait up to 6 seconds
-                if not finished and self.speech_recognizer.isRunning():
-                    # Last-resort: force termination to avoid qFatal on destruction
-                    logger.warning("Recognizer thread still running on close; forcing terminate()")
-                    try:
-                        self.speech_recognizer.terminate()
-                    except Exception:
-                        pass
-                    try:
-                        self.speech_recognizer.wait(2000)
-                    except Exception:
-                        pass
-        except Exception as e:
-            logger.debug(f"Error during closeEvent: {e}")
+        except Exception:
+            pass
         return super().closeEvent(event)
 
     def _alert(self, message: str) -> None:
@@ -624,67 +590,3 @@ class MainWindow(QMainWindow):
             }
         """)
         msg_box.exec()
-
-    def _on_noise_profile_changed(self, profile_key: str) -> None:
-        """Recreate recognizer with the selected noise profile preserving engine & numbers_only.
-
-        Skips recreation if the active recognizer already uses the requested profile to avoid
-        prematurely destroying a still-loading QThread (fixes sporadic 'QThread: Destroyed while thread is still running').
-        Safe-guards against replacing a still-running thread (if wait() times out) by aborting update.
-        """
-        try:
-            # Guard: if recognizer already on this profile, no work needed
-            current_profile = getattr(self.speech_recognizer, "_noise_profile_name", None)
-            if current_profile == profile_key:
-                logger.debug(f"Noise profile '{profile_key}' already active; no recreation needed")
-                self.statusBar().showMessage(f"Noise profile '{profile_key}' already active")
-                return
-
-            cls_name = self.speech_recognizer.__class__.__name__.lower()
-            if "whisperx" in cls_name:
-                engine = "whisperx"
-            elif "vosk" in cls_name:
-                engine = "vosk"
-            elif "google" in cls_name:
-                engine = "google"
-            else:
-                engine = "whisper"
-            numbers_only = bool(getattr(self.speech_recognizer, "numbers_only", False))
-            # Stop current recognizer and wait for clean shutdown (longer timeout for first model download)
-            old_recognizer = self.speech_recognizer
-            try:
-                if hasattr(old_recognizer, 'requestInterruption'):
-                    old_recognizer.requestInterruption()
-            except Exception:
-                pass
-            try:
-                old_recognizer.stop()
-            except Exception:
-                pass
-            try:
-                if getattr(old_recognizer, 'isRunning', lambda: False)():
-                    # Wait up to 12s to accommodate model download / initialization
-                    finished = old_recognizer.wait(12000)
-                    if not finished and getattr(old_recognizer, 'isRunning', lambda: False)():
-                        # Abort profile change to avoid destroying a running QThread
-                        logger.warning("Profile change aborted: recognizer thread still running after timeout")
-                        self.statusBar().showMessage("Profile change aborted (recognizer busy)")
-                        return
-            except Exception:
-                pass
-            # Create new recognizer instance with updated profile (only after confirmed stopped)
-            new_recognizer = create_recognizer(engine, numbers_only=numbers_only, noise_profile=profile_key)
-            self.speech_recognizer = new_recognizer
-            self._connect_signals()
-            # Start it
-            if hasattr(self.speech_recognizer, "begin"):
-                self.speech_recognizer.begin()
-            else:
-                self.speech_recognizer.start()
-            self.statusBar().showMessage(f"Noise profile set to '{profile_key}'. Listening…")
-        except Exception as e:
-            self.statusBar().showMessage("Failed to switch noise profile")
-            try:
-                logger.error(f"Noise profile switch failed: {e}")
-            except Exception:
-                pass

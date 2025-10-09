@@ -363,7 +363,7 @@ class WhisperRecognizer(BaseSpeechRecognizer):
 
         # Start listening
         with self._stream:
-            logger.info("Recording with noise control... Press Stop to end.")
+            logger.info(f"Recording with noise control... Press Stop to end. [profile={self._noise_profile_name}]")
             self.partial_text.emit("Listening…")
             self._emit_status_once("listening")
 

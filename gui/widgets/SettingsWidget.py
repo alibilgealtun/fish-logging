@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
-import json
 
 from PyQt6.QtWidgets import (
     QWidget,
@@ -12,9 +11,8 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QInputDialog,
-    QComboBox,
 )
-from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt, QTimer
+from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt
 from PyQt6.QtGui import QCursor
 
 # Optional logger: prefer loguru if available, else fallback to stdlib logging
@@ -51,6 +49,7 @@ class _BackupWorker(QObject):
 
 
 class SettingsWidget(QWidget):
+    # Bubble up noise profile changes to MainWindow
     noiseProfileChanged = pyqtSignal(str)
 
     def __init__(self, parent=None):
@@ -59,65 +58,8 @@ class SettingsWidget(QWidget):
         self._cfg: Optional[GoogleSheetsConfig] = self._svc.load_config()
         self._thread: Optional[QThread] = None
         self._worker: Optional[_BackupWorker] = None
-        self._user_settings_path = Path("config/user_settings.json")
-        # Suppress auto-emission of noise profile change during initial widget setup
-        self._suppress_profile_signal: bool = True
         self._build_ui()
         self._refresh_config_labels()
-        self._load_saved_noise_profile()
-        # Re-enable emission after event loop starts to ensure recognizer is fully initialized
-        QTimer.singleShot(0, self._enable_profile_signal)
-        # Ensure background QThread is stopped if app quits due to OS signals
-        try:
-            from PyQt6.QtWidgets import QApplication
-            app = QApplication.instance()
-            if app is not None:
-                app.aboutToQuit.connect(self._on_app_quit)
-        except Exception:
-            pass
-
-    def _enable_profile_signal(self) -> None:
-        # Allow future user-driven noise profile changes to emit
-        self._suppress_profile_signal = False
-
-    def closeEvent(self, event):  # type: ignore[override]
-        """Ensure the background backup thread is stopped before widget is destroyed."""
-        try:
-            if self._thread is not None and self._thread.isRunning():
-                try:
-                    # Ask the thread's event loop to exit (worker may finish soon)
-                    self._thread.quit()
-                except Exception:
-                    pass
-                try:
-                    # Wait a bit for graceful shutdown
-                    if not self._thread.wait(3000):
-                        # Last resort: force termination to prevent Qt abort
-                        logger.warning("Settings backup thread still running on close; forcing terminate()")
-                        try:
-                            self._thread.terminate()
-                        except Exception:
-                            pass
-                        try:
-                            self._thread.wait(1000)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-        finally:
-            try:
-                if self._worker is not None:
-                    self._worker.deleteLater()
-            except Exception:
-                pass
-            try:
-                if self._thread is not None:
-                    self._thread.deleteLater()
-            except Exception:
-                pass
-            self._worker = None
-            self._thread = None
-        return super().closeEvent(event)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -127,7 +69,7 @@ class SettingsWidget(QWidget):
         header = ModernLabel("⚙️ Settings", style="header")
         layout.addWidget(header)
 
-        # NEW: Configs panel (Station ID & Boat Name)
+        # NEW: Configs panel (Station ID & Boat Name & Noise Profile)
         configs_panel = GlassPanel()
         configs_layout = QVBoxLayout(configs_panel)
         configs_layout.setContentsMargins(20, 16, 20, 16)
@@ -137,33 +79,24 @@ class SettingsWidget(QWidget):
         configs_layout.addWidget(configs_title)
 
         # Import the widgets
-        from gui.widgets import StationIdInput, BoatNameInput
+        from gui.widgets import StationIdInput, BoatNameInput, NoiseProfileInput
 
-        # Station ID and Boat Name in the same row
+        # Station ID, Boat Name and Noise Profile in the same row
         configs_row = QHBoxLayout()
         configs_row.setSpacing(12)
         self.station_input = StationIdInput()
         self.boat_input = BoatNameInput()
+        self.noise_input = NoiseProfileInput()
+        # Forward profile change
+        try:
+            self.noise_input.profileChanged.connect(self.noiseProfileChanged.emit)
+        except Exception:
+            pass
         configs_row.addWidget(self.station_input)
         configs_row.addWidget(self.boat_input)
+        configs_row.addWidget(self.noise_input)
         configs_row.addStretch(1)
         configs_layout.addLayout(configs_row)
-
-        # Noise profile selector row
-        profile_row = QHBoxLayout()
-        profile_label = ModernLabel("Noise Profile:", style="subheader")
-        self.noise_profile_combo = QComboBox()
-        self.noise_profile_combo.addItem("Mixed (human + engine)", "mixed")
-        self.noise_profile_combo.addItem("Human Voices", "human")
-        self.noise_profile_combo.addItem("Engine Noise", "engine")
-        self.noise_profile_combo.addItem("Clean / Quiet", "clean")
-        self.noise_profile_combo.setCurrentIndex(0)
-        self.noise_profile_combo.setToolTip("Select acoustic environment to adapt VAD & suppression")
-        self.noise_profile_combo.currentIndexChanged.connect(self._on_noise_profile_changed)
-        profile_row.addWidget(profile_label)
-        profile_row.addWidget(self.noise_profile_combo)
-        profile_row.addStretch(1)
-        configs_layout.addLayout(profile_row)
 
         layout.addWidget(configs_panel)
 
@@ -387,81 +320,3 @@ class SettingsWidget(QWidget):
             "- If backup fails, ensure the sheet is shared with the service account.\n"
         )
         QMessageBox.information(self, "How to set up Google Sheets Backup", steps)
-
-    def _load_saved_noise_profile(self) -> None:
-        """Load and apply last saved noise profile from user_settings.json."""
-        try:
-            if self._user_settings_path.exists():
-                with open(self._user_settings_path, 'r') as f:
-                    settings = json.load(f)
-                saved_profile = settings.get("noise_profile", "mixed")
-                # Find and select the matching item WITHOUT emitting (suppressed by flag)
-                for i in range(self.noise_profile_combo.count()):
-                    if self.noise_profile_combo.itemData(i) == saved_profile:
-                        if i != self.noise_profile_combo.currentIndex():
-                            self.noise_profile_combo.setCurrentIndex(i)
-                        break
-        except Exception as e:
-            logger.debug(f"Could not load saved noise profile: {e}")
-
-    def _save_noise_profile(self, profile_key: str) -> None:
-        """Persist the selected noise profile to user_settings.json."""
-        try:
-            settings = {}
-            if self._user_settings_path.exists():
-                with open(self._user_settings_path, 'r') as f:
-                    settings = json.load(f)
-            settings["noise_profile"] = profile_key
-            self._user_settings_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._user_settings_path, 'w') as f:
-                json.dump(settings, f, indent=2)
-        except Exception as e:
-            logger.error(f"Failed to save noise profile: {e}")
-
-    def _on_noise_profile_changed(self, idx: int) -> None:
-        try:
-            if self._suppress_profile_signal:
-                return  # Ignore programmatic changes during initialization
-            key = self.noise_profile_combo.currentData()
-            if isinstance(key, str):
-                self._save_noise_profile(key)
-                self.noiseProfileChanged.emit(key)
-                logger.info(f"Noise profile changed to {key}")
-        except Exception as e:
-            logger.error(f"Failed to emit noise profile change: {e}")
-
-    def _on_app_quit(self) -> None:
-        """App-wide quit hook: stop and clean up the backup thread if running."""
-        try:
-            th = getattr(self, "_thread", None)
-            if th is not None and th.isRunning():
-                try:
-                    th.quit()
-                except Exception:
-                    pass
-                try:
-                    if not th.wait(2000):
-                        try:
-                            th.terminate()
-                        except Exception:
-                            pass
-                        try:
-                            th.wait(800)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-        finally:
-            try:
-                if getattr(self, "_worker", None) is not None:
-                    self._worker.deleteLater()
-            except Exception:
-                pass
-            try:
-                if getattr(self, "_thread", None) is not None:
-                    self._thread.deleteLater()
-            except Exception:
-                pass
-            self._worker = None
-            self._thread = None
-

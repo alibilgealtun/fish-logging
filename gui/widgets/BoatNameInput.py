@@ -17,6 +17,7 @@ class BoatNameInput(QWidget):
         layout.setSpacing(6)
 
         label = QLabel("⛵ Boat:")
+        label.setStyleSheet("QLabel { color: white; }")
         self.edit = QLineEdit()
         self.edit.setPlaceholderText("Enter boat name...")
         self.edit.setMinimumHeight(36)
