@@ -60,6 +60,9 @@ coverage.xml
 # Django stuff:
 *.log
 
+# User-specific settings (should not be in git)
+config/user_settings.json
+
 # Sphinx documentation
 docs/_build/
 

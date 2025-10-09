@@ -155,6 +155,14 @@ class ReportWidget(QWidget):
         self._species_timer.setInterval(250)
         self._species_timer.timeout.connect(self._render_species_if_needed)
         self._build_ui()
+        # Ensure background QThreads are stopped when the app quits due to OS signals
+        try:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is not None:
+                app.aboutToQuit.connect(self._on_app_quit)
+        except Exception:
+            pass
 
     class _ChartBridge(QObject):  # bridge for JS -> Python events (reserved for future interactive embedding)
         js_event = pyqtSignal(dict)  # type: ignore[misc]
@@ -438,24 +446,70 @@ class ReportWidget(QWidget):
     def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
         # Ensure threads are cleaned up on widget close
         try:
+            self._stop_workers()
+        except Exception:
+            pass
+        super().closeEvent(event)
+
+    def _stop_workers(self) -> None:
+        """Stop and wait for any active worker threads (generation/render)."""
+        try:
             if self.worker is not None:
-                if self.worker.isRunning():
-                    self.worker.requestInterruption()
-                    self.worker.wait(2000)
-                self.worker.deleteLater()
-                self.worker = None
+                try:
+                    if self.worker.isRunning():
+                        try:
+                            self.worker.requestInterruption()
+                        except Exception:
+                            pass
+                        if not self.worker.wait(2000):
+                            try:
+                                self.worker.terminate()
+                            except Exception:
+                                pass
+                            try:
+                                self.worker.wait(1000)
+                            except Exception:
+                                pass
+                finally:
+                    try:
+                        self.worker.deleteLater()
+                    except Exception:
+                        pass
+                    self.worker = None
         except Exception:
             pass
         try:
             if self._render_worker is not None:
-                if self._render_worker.isRunning():
-                    self._render_worker.requestInterruption()
-                    self._render_worker.wait(1000)
-                self._render_worker.deleteLater()
-                self._render_worker = None
+                try:
+                    if self._render_worker.isRunning():
+                        try:
+                            self._render_worker.requestInterruption()
+                        except Exception:
+                            pass
+                        if not self._render_worker.wait(1500):
+                            try:
+                                self._render_worker.terminate()
+                            except Exception:
+                                pass
+                            try:
+                                self._render_worker.wait(800)
+                            except Exception:
+                                pass
+                finally:
+                    try:
+                        self._render_worker.deleteLater()
+                    except Exception:
+                        pass
+                    self._render_worker = None
         except Exception:
             pass
-        super().closeEvent(event)
+
+    def _on_app_quit(self) -> None:
+        """App-wide quit hook: make sure our QThreads are stopped before Qt teardown."""
+        try:
+            self._stop_workers()
+        except Exception:
+            pass
 
     def _ensure_generator_and_data(self) -> bool:
         """Ensure generator and DataFrame are available for visualization.

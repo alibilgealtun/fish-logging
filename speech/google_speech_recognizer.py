@@ -9,7 +9,6 @@ import soundfile as sf
 from PyQt6.QtCore import pyqtSignal
 from noise.controller import NoiseController
 import json
-from logger.session_logger import SessionLogger
 
 
 class GoogleSpeechRecognizer(BaseSpeechRecognizer):
@@ -31,16 +30,14 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
     MAX_SEGMENT_S: float = 3.0
     PADDING_MS: int = 600
 
-    def __init__(self, language: str = "en-US", credentials_path: Optional[str] = None, numbers_only: bool = False):
-        """
-        Google Cloud Speech-to-Text recognizer.
+    def __init__(self, language: str = "en-US", credentials_path: Optional[str] = None, numbers_only: bool = False, noise_profile: Optional[str] = None):
+        """Google Cloud Speech-to-Text recognizer with optional noise profile.
 
-        :param language: BCP-47 language code (e.g., "en-US", "tr-TR").
-        :param credentials_path: Path to Google Cloud credentials JSON.
-        :param numbers_only: If True, bias recognition to numbers/units and emit numeric-only results.
+        noise_profile: Optional name (clean|human|engine|mixed) controlling VAD/segment/suppression.
         """
         super().__init__(language=language)
         self.numbers_only = bool(numbers_only)
+        self._noise_profile_name = (noise_profile or "mixed").lower()
         if credentials_path:
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
         elif not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
@@ -48,27 +45,35 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
             if os.path.exists(candidate) and self._is_valid_gcp_credentials_file(candidate):
                 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = candidate
                 logger.info("Using credentials at project root: google.json")
-
-        # Lazy client, created on first use
         self._client = None
-
-        # Realtime state
         self._stream = None  # type: ignore
         self._chunk_frames: int = int(self.SAMPLE_RATE * self.CHUNK_S)
         self._last_status_msg: Optional[str] = None
-
-        # Load number prefix (helps Google bias toward numbers-first phrases)
+        # Number prefix
         self._number_sound = self._load_number_prefix()
-
-        # Initialize noise controller
-        self._noise_controller = NoiseController(
-            sample_rate=self.SAMPLE_RATE,
-            vad_mode=self.VAD_MODE,
-            min_speech_s=self.MIN_SPEECH_S,
-            max_segment_s=self.MAX_SEGMENT_S,
-        )
-
-        # Prepare phrase hints once
+        # Apply noise profile overrides prior to creating controller
+        from speech.noise_profiles import get_noise_profile, make_suppressor_config
+        prof = get_noise_profile(self._noise_profile_name)
+        for attr in ("VAD_MODE", "MIN_SPEECH_S", "MAX_SEGMENT_S", "PADDING_MS"):
+            if attr in prof:
+                setattr(self, attr, prof[attr])
+        suppressor_cfg = make_suppressor_config(prof, self.SAMPLE_RATE)
+        if self._noise_profile_name == "clean":
+            from noise.simple_controller import SimpleNoiseController
+            self._noise_controller = SimpleNoiseController(
+                sample_rate=self.SAMPLE_RATE,
+                vad_mode=self.VAD_MODE,
+                min_speech_s=self.MIN_SPEECH_S,
+                max_segment_s=self.MAX_SEGMENT_S,
+            )
+        else:
+            self._noise_controller = NoiseController(
+                sample_rate=self.SAMPLE_RATE,
+                vad_mode=self.VAD_MODE,
+                min_speech_s=self.MIN_SPEECH_S,
+                max_segment_s=self.MAX_SEGMENT_S,
+                suppressor_config=suppressor_cfg,
+            )
         self._phrase_hints = self._build_phrase_hints(numbers_only=self.numbers_only)
 
     @staticmethod
@@ -258,67 +263,6 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
         # Fallback to short silence
         return (np.zeros(int(self.SAMPLE_RATE * 0.05))).astype(np.int16)
 
-    def _build_phrase_hints(self, numbers_only: bool = False) -> List[str]:
-        """Collect hints. If numbers_only, restrict to numbers/units and a few control words."""
-        hints: List[str] = []
-        
-        # Get data from centralized config if available
-        try:
-            from config.config import ConfigLoader
-            loader = ConfigLoader()
-            config, _ = loader.load([])
-            
-            numbers_cfg = config.numbers_data
-            units_cfg = config.units_data
-            species_cfg = config.species_data
-            
-            number_words = list(numbers_cfg.get("number_words", {}).keys())
-            unit_words = list(units_cfg.get("synonyms", {}).keys())
-        except Exception:
-            # Fallback to hardcoded values
-            number_words = [
-                "zero","one","two","three","four","five","six","seven","eight","nine",
-                "ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen",
-                "eighteen","nineteen","twenty","thirty","forty","fifty","sixty","seventy",
-                "eighty","ninety","hundred","point","dot","comma"
-            ]
-            unit_words = ["cm","centimeter","centimeters","mm","millimeter","millimeters"]
-            species_cfg = {}
-
-        if numbers_only:
-            hints.extend(number_words)
-            hints.extend(unit_words)
-            hints.extend(["point", "dot", "comma"])  # decimals
-            hints.extend(["wait", "start"])  # app control words
-        else:
-            # Include species as well for general mode
-            try:
-                for item in species_cfg.get("items", []):
-                    name = item.get("name")
-                    if name:
-                        hints.append(str(name))
-            except Exception:
-                pass
-            hints.extend(number_words)
-            hints.extend(unit_words)
-            hints.extend(["wait", "start", "cancel"])  # app commands
-
-        # Deduplicate and cap size
-        seen = set()
-        uniq: List[str] = []
-        for h in hints:
-            h2 = h.strip()
-            if not h2:
-                continue
-            k = h2.lower()
-            if k in seen:
-                continue
-            seen.add(k)
-            uniq.append(h2)
-            if len(uniq) >= 500:
-                break
-        return uniq
-
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
         if status:
             logger.debug(f"Audio status: {status}")
@@ -337,17 +281,31 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                 logger.error(f"Failed to emit status_changed message: {message}")
 
     def begin(self) -> None:
-        # Reset flags/state for a clean restart
         self._stop_flag = False
         self._last_status_msg = None
-
-        # Recreate noise controller each time
-        self._noise_controller = NoiseController(
-            sample_rate=self.SAMPLE_RATE,
-            vad_mode=self.VAD_MODE,
-            min_speech_s=self.MIN_SPEECH_S,
-            max_segment_s=self.MAX_SEGMENT_S,
-        )
+        # Rebuild controller with (possibly re-applied) profile
+        from speech.noise_profiles import get_noise_profile, make_suppressor_config
+        prof = get_noise_profile(self._noise_profile_name)
+        for attr in ("VAD_MODE", "MIN_SPEECH_S", "MAX_SEGMENT_S", "PADDING_MS"):
+            if attr in prof:
+                setattr(self, attr, prof[attr])
+        suppressor_cfg = make_suppressor_config(prof, self.SAMPLE_RATE)
+        if self._noise_profile_name == "clean":
+            from noise.simple_controller import SimpleNoiseController
+            self._noise_controller = SimpleNoiseController(
+                sample_rate=self.SAMPLE_RATE,
+                vad_mode=self.VAD_MODE,
+                min_speech_s=self.MIN_SPEECH_S,
+                max_segment_s=self.MAX_SEGMENT_S,
+            )
+        else:
+            self._noise_controller = NoiseController(
+                sample_rate=self.SAMPLE_RATE,
+                vad_mode=self.VAD_MODE,
+                min_speech_s=self.MIN_SPEECH_S,
+                max_segment_s=self.MAX_SEGMENT_S,
+                suppressor_config=suppressor_cfg,
+            )
         if not self.isRunning():
             try:
                 self.start()
@@ -405,18 +363,13 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
             self.partial_text.emit("Listening…")
             self._emit_status_once("listening")
 
-            segment_generator = self._noise_controller.collect_segments_with_timing(
+            segment_generator = self._noise_controller.collect_segments(
                 padding_ms=self.PADDING_MS
             )
 
             while not self.is_stopped():
                 try:
-                    item = next(segment_generator)
-                    if isinstance(item, tuple) and len(item) == 3:
-                        segment, start_ts, end_ts = item
-                    else:
-                        segment = item  # type: ignore
-                        start_ts = end_ts = None
+                    segment = next(segment_generator)
                     if segment is None or segment.size == 0:
                         continue
 
@@ -425,15 +378,6 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                         continue
 
                     self._emit_status_once("processing")
-
-                    # Log capture timing (if timestamps available)
-                    try:
-                        if start_ts is not None and end_ts is not None:
-                            SessionLogger.get().log_segment_timing(
-                                float(start_ts), float(end_ts), int(segment.size), self.SAMPLE_RATE, note="captured"
-                            )
-                    except Exception:
-                        pass
 
                     # Prepend number prefix and send raw PCM to Google
                     #combined = np.concatenate((self._number_sound, segment)).astype(np.int16)
@@ -462,12 +406,6 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                         continue
 
                     logger.info(f"Raw transcription: {text_out}")
-                    try:
-                        SessionLogger.get().log(
-                            f"TRANSCRIPT: '{text_out}' audio_s={(segment.size / self.SAMPLE_RATE):.3f}"
-                        )
-                    except Exception:
-                        pass
 
                     # Handle control commands
                     text_lower = text_out.lower()
@@ -539,3 +477,17 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
 
         self._emit_status_once("stopped")
         logger.info("Google speech recognizer stopped")
+
+    def get_config(self) -> Dict[str, Any]:
+        return {
+            "SAMPLE_RATE": self.SAMPLE_RATE,
+            "CHANNELS": self.CHANNELS,
+            "CHUNK_S": self.CHUNK_S,
+            "VAD_MODE": self.VAD_MODE,
+            "MIN_SPEECH_S": self.MIN_SPEECH_S,
+            "MAX_SEGMENT_S": self.MAX_SEGMENT_S,
+            "PADDING_MS": self.PADDING_MS,
+            "LANGUAGE": self.language,
+            "NUMBERS_ONLY": self.numbers_only,
+            "NOISE_PROFILE": self._noise_profile_name,
+        }
