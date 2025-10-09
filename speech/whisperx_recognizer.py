@@ -98,10 +98,11 @@ class WhisperXRecognizer(BaseSpeechRecognizer):
         self._last_fish_specie = None
         self._noise_profile_name = (noise_profile or "mixed").lower()
 
-        # Short "number" marker like faster_whisper used
+        # Short "number" marker like faster_whisper used (resampled/mono)
         try:
-            self._number_sound, _ = sf.read("tests/audio/number.wav", dtype='int16')
-        except Exception:
+            self._number_sound = self._load_number_prefix()
+        except Exception as e:
+            logger.debug(f"Failed to load number prefix: {e}")
             # fallback to silence of 0.05s if asset not found
             self._number_sound = (np.zeros(int(self.SAMPLE_RATE * 0.05))).astype(np.int16)
 
@@ -120,6 +121,41 @@ class WhisperXRecognizer(BaseSpeechRecognizer):
             max_segment_s=self.MAX_SEGMENT_S,
             suppressor_config=suppressor_cfg,
         )
+
+    def _load_number_prefix(self) -> np.ndarray:
+        """Load and prepare the number prefix audio as PCM16 mono at SAMPLE_RATE."""
+        candidates = [
+            os.path.join(os.getcwd(), "number_prefix.wav"),
+            os.path.join(os.getcwd(), "number.wav"),
+            os.path.join(os.getcwd(), "tests", "audio", "number.wav"),
+        ]
+        for p in candidates:
+            try:
+                if not os.path.exists(p):
+                    continue
+                data, sr = sf.read(p, dtype="int16")
+                if data.ndim > 1:
+                    data = data[:, 0]
+                if sr != self.SAMPLE_RATE:
+                    try:
+                        from scipy.signal import resample_poly  # type: ignore
+                        gcd = np.gcd(sr, self.SAMPLE_RATE)
+                        up = self.SAMPLE_RATE // gcd
+                        down = sr // gcd
+                        data = resample_poly(data.astype(np.int16), up, down).astype(np.int16)
+                    except Exception:
+                        ratio = self.SAMPLE_RATE / float(sr)
+                        idx = (np.arange(int(len(data) * ratio)) / ratio).astype(int)
+                        idx = np.clip(idx, 0, len(data) - 1)
+                        data = data[idx].astype(np.int16)
+                    logger.info(f"Loaded number prefix '{os.path.basename(p)}' at {sr}Hz -> resampled to {self.SAMPLE_RATE}Hz")
+                else:
+                    logger.info(f"Loaded number prefix '{os.path.basename(p)}' at {sr}Hz (no resample)")
+                return data.astype(np.int16)
+            except Exception as e:
+                logger.debug(f"Failed to load number prefix {p}: {e}")
+        logger.warning("No number prefix audio found; using short silence")
+        return (np.zeros(int(self.SAMPLE_RATE * 0.05))).astype(np.int16)
 
     # ---------- Public control ----------
     def stop(self) -> None:

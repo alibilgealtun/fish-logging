@@ -96,12 +96,11 @@ class WhisperRecognizer(BaseSpeechRecognizer):
         self._last_status_msg: Optional[str] = None
         self._noise_profile_name = (noise_profile or "mixed").lower()
 
-        # Load number marker
+        # Load number marker (resampled/mono to match pipeline)
         try:
-            self._number_sound, _ = sf.read("number.wav", dtype='int16')
-            logger.info("NUMBERR++++++++++++++++++")
+            self._number_sound = self._load_number_prefix()
         except Exception as e:
-            logger.debug("NUMBER SOUND", e)
+            logger.debug(f"Failed to load number prefix: {e}")
             self._number_sound = (np.zeros(int(self.SAMPLE_RATE * 0.05))).astype(np.int16)
 
         # Apply profile overrides
@@ -249,6 +248,53 @@ class WhisperRecognizer(BaseSpeechRecognizer):
             except Exception:
                 logger.error(f"Failed to emit status_changed message: {message}")
 
+    def _load_number_prefix(self) -> np.ndarray:
+        """Load and prepare the number prefix audio.
+
+        - Searches common paths
+        - Ensures mono
+        - Resamples to recognizer SAMPLE_RATE
+        - Returns PCM16 numpy array
+        """
+        candidates = [
+            os.path.join(os.getcwd(), "number_prefix.wav"),
+            os.path.join(os.getcwd(), "number.wav"),
+            os.path.join(os.getcwd(), "tests", "audio", "number.wav"),
+        ]
+        for p in candidates:
+            try:
+                if not os.path.exists(p):
+                    continue
+                data, sr = sf.read(p, dtype="int16")
+                if data.ndim > 1:
+                    # Use first channel to avoid amplitude changes from averaging
+                    data = data[:, 0]
+                # Resample if needed
+                if sr != self.SAMPLE_RATE:
+                    try:
+                        # Prefer high-quality polyphase if available
+                        from scipy.signal import resample_poly  # type: ignore
+                        # Compute integer up/down for better quality
+                        gcd = np.gcd(sr, self.SAMPLE_RATE)
+                        up = self.SAMPLE_RATE // gcd
+                        down = sr // gcd
+                        data = resample_poly(data.astype(np.int16), up, down).astype(np.int16)
+                    except Exception:
+                        # Fallback: simple index-based resample (nearest)
+                        ratio = self.SAMPLE_RATE / float(sr)
+                        idx = (np.arange(int(len(data) * ratio)) / ratio).astype(int)
+                        idx = np.clip(idx, 0, len(data) - 1)
+                        data = data[idx].astype(np.int16)
+                    logger.info(f"Loaded number prefix '{os.path.basename(p)}' at {sr}Hz -> resampled to {self.SAMPLE_RATE}Hz")
+                else:
+                    logger.info(f"Loaded number prefix '{os.path.basename(p)}' at {sr}Hz (no resample)")
+                return data.astype(np.int16)
+            except Exception as e:
+                logger.debug(f"Failed to load number prefix {p}: {e}")
+        # Fallback to 50 ms of silence
+        logger.warning("No number prefix audio found; using short silence")
+        return (np.zeros(int(self.SAMPLE_RATE * 0.05))).astype(np.int16)
+
     # ---------- Thread main ----------
     def run(self) -> None:
         """Run the realtime STT loop with integrated noise control."""
@@ -325,9 +371,8 @@ class WhisperRecognizer(BaseSpeechRecognizer):
 
                     # Update status
                     self._emit_status_once("processing")
-                    logger.debug(f"Segment duration before concatting: {segment_duration}")
+
                     segment = np.concatenate((self._number_sound, segment))
-                    logger.debug(f"Segment duration after concatting: {(segment.size / self.SAMPLE_RATE)}")
                     # Write segment to temporary file
                     wav_path = self._write_wav_bytes(segment, self.SAMPLE_RATE)
 

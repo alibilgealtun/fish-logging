@@ -95,8 +95,9 @@ class InsanelyFastWhisperRecognizer(BaseSpeechRecognizer):
         self._last_fish_specie = None
         self._noise_profile_name = (noise_profile or "mixed").lower()
         try:
-            self._number_sound, _ = sf.read("tests/audio/number.wav", dtype='int16')
-        except Exception:
+            self._number_sound = self._load_number_prefix()
+        except Exception as e:
+            logger.debug(f"Failed to load number prefix: {e}")
             self._number_sound = (np.zeros(int(self.SAMPLE_RATE * 0.05))).astype(np.int16)
         from speech.noise_profiles import get_noise_profile, make_suppressor_config
         prof = get_noise_profile(self._noise_profile_name)
@@ -111,6 +112,41 @@ class InsanelyFastWhisperRecognizer(BaseSpeechRecognizer):
             max_segment_s=self.MAX_SEGMENT_S,
             suppressor_config=suppressor_cfg,
         )
+
+    def _load_number_prefix(self) -> np.ndarray:
+        """Load and prepare the number prefix audio as PCM16 mono at SAMPLE_RATE."""
+        candidates = [
+            os.path.join(os.getcwd(), "number_prefix.wav"),
+            os.path.join(os.getcwd(), "number.wav"),
+            os.path.join(os.getcwd(), "tests", "audio", "number.wav"),
+        ]
+        for p in candidates:
+            try:
+                if not os.path.exists(p):
+                    continue
+                data, sr = sf.read(p, dtype="int16")
+                if data.ndim > 1:
+                    data = data[:, 0]
+                if sr != self.SAMPLE_RATE:
+                    try:
+                        from scipy.signal import resample_poly  # type: ignore
+                        gcd = np.gcd(sr, self.SAMPLE_RATE)
+                        up = self.SAMPLE_RATE // gcd
+                        down = sr // gcd
+                        data = resample_poly(data.astype(np.int16), up, down).astype(np.int16)
+                    except Exception:
+                        ratio = self.SAMPLE_RATE / float(sr)
+                        idx = (np.arange(int(len(data) * ratio)) / ratio).astype(int)
+                        idx = np.clip(idx, 0, len(data) - 1)
+                        data = data[idx].astype(np.int16)
+                    logger.info(f"Loaded number prefix '{os.path.basename(p)}' at {sr}Hz -> resampled to {self.SAMPLE_RATE}Hz")
+                else:
+                    logger.info(f"Loaded number prefix '{os.path.basename(p)}' at {sr}Hz (no resample)")
+                return data.astype(np.int16)
+            except Exception as e:
+                logger.debug(f"Failed to load number prefix {p}: {e}")
+        logger.warning("No number prefix audio found; using short silence")
+        return (np.zeros(int(self.SAMPLE_RATE * 0.05))).astype(np.int16)
 
     def stop(self) -> None:
         self._stop_flag = True
@@ -253,101 +289,119 @@ class InsanelyFastWhisperRecognizer(BaseSpeechRecognizer):
             while not self.is_stopped():
                 try:
                     segment = next(segment_generator)
+
                     if segment is None or segment.size == 0:
                         continue
 
-                    if segment.size / self.SAMPLE_RATE < self.MIN_SPEECH_S:
+                    segment_duration = segment.size / self.SAMPLE_RATE
+                    if segment_duration < self.MIN_SPEECH_S:
                         continue
 
                     self._emit_status_once("processing")
 
-                    combined = np.concatenate((self._number_sound, segment))
-                    wav_path = self._write_wav_bytes(combined, self.SAMPLE_RATE)
+                    segment = np.concatenate((self._number_sound, segment))
+                    wav_path = self._write_wav_bytes(segment, self.SAMPLE_RATE)
 
                     # Save the audio segment to file (for debugging/inspection)
                     audio_saver = get_audio_saver()
-                    audio_saver.save_segment(combined, self.SAMPLE_RATE)
+                    audio_saver.save_segment(segment, self.SAMPLE_RATE)
 
                     try:
-                        result = self._model.transcribe(
-                            wav_path,
-                            beam_size=self.BEAM_SIZE,
-                            best_of=self.BEST_OF,
-                            temperature=self.TEMPERATURE,
-                            initial_prompt=self.FISH_PROMPT,
-                            without_timestamps=self.WITHOUT_TIMESTAMPS
-                        )
-                        # result is typically dict with 'text' and 'segments'
-                        segments = []
-                        if isinstance(result, dict):
-                            text_out = result.get("text", "").strip()
-                            for seg in result.get("segments", []):
-                                segments.append(TranscriptionSegment(text=seg.get("text", ""), confidence=seg.get("avg_logprob", 0.85)))
+                        assert self._model is not None
+                        # Transcribe using IFW API
+                        if hasattr(self._model, "transcribe"):
+                            result = self._model.transcribe(wav_path)
+                            if isinstance(result, dict) and "text" in result:
+                                text_out = str(result.get("text", "")).strip()
+                                segments = [TranscriptionSegment(text=text_out, confidence=0.85)] if text_out else []
+                            elif isinstance(result, list):
+                                segments = []
+                                for seg in result:
+                                    seg_text = seg.get("text", "") if isinstance(seg, dict) else getattr(seg, "text", str(seg))
+                                    if seg_text:
+                                        segments.append(TranscriptionSegment(text=seg_text.strip(), confidence=0.85))
+                            else:
+                                text_out = str(result).strip()
+                                segments = [TranscriptionSegment(text=text_out, confidence=0.85)] if text_out else []
                         else:
-                            text_out = str(result).strip()
-                            segments = [TranscriptionSegment(text=text_out, confidence=0.85)]
+                            raise RuntimeError("IFW transcriber has no transcribe method")
 
                     except Exception as e:
-                        logger.error(f"Transcription error (IFW): {e}")
-                        self.error.emit(f"Transcription error: {e}")
-                        try: os.remove(wav_path)
-                        except: pass
+                        msg = f"Transcription error (IFW): {e}"
+                        logger.error(msg)
+                        self.error.emit(msg)
+                        try:
+                            os.remove(wav_path)
+                        except Exception:
+                            pass
                         self._emit_status_once("listening")
                         continue
 
                     text_out = "".join(seg.text + " " for seg in segments).strip()
                     if not text_out:
                         self._emit_status_once("listening")
-                        try: os.remove(wav_path)
-                        except: pass
+                        try:
+                            os.remove(wav_path)
+                        except Exception:
+                            pass
                         continue
 
                     logger.info(f"Raw transcription (IFW): {text_out}")
 
-                    # Check for pause/resume commands
-                    lower = text_out.lower()
-                    if "wait" in lower:
+                    text_lower = text_out.lower()
+                    if "wait" in text_lower:
                         self.pause()
                         self.final_text.emit("Waiting until 'start' is said.", 0.85)
-                        os.remove(wav_path)
+                        try:
+                            os.remove(wav_path)
+                        except Exception:
+                            pass
                         continue
-                    elif "start" in lower:
+                    elif "start" in text_lower:
                         self.resume()
-                        os.remove(wav_path)
+                        try:
+                            os.remove(wav_path)
+                        except Exception:
+                            pass
                         continue
 
                     if self._paused:
                         logger.debug("Paused: ignoring transcription")
-                        os.remove(wav_path)
+                        try:
+                            os.remove(wav_path)
+                        except Exception:
+                            pass
                         continue
 
                     try:
                         from parser import FishParser, TextNormalizer
                         fish_parser = FishParser()
                         text_normalizer = TextNormalizer()
-
                         corrected_text = text_normalizer.apply_fish_asr_corrections(text_out)
-                        result = fish_parser.parse_text(corrected_text)
-
-                        if result.species:
+                        if corrected_text != text_out.lower():
+                            logger.info(f"After ASR corrections: {corrected_text}")
+                        result: ParserResult = fish_parser.parse_text(corrected_text)
+                        if result.species is not None:
                             self._last_fish_specie = result.species
                             self.specie_detected.emit(result.species)
-
                         if result.length_cm is not None:
-                            num_str = f"{result.length_cm:.1f}".rstrip("0").rstrip(".")
+                            raw_val = float(result.length_cm)
+                            num_str = (f"{raw_val:.1f}").rstrip("0").rstrip(".")
                             formatted = f"{self._last_fish_specie} {num_str} cm"
                             logger.info(f">> {formatted}")
                             self.final_text.emit(formatted, 0.85)
                         else:
                             logger.info(f">> {corrected_text} (partial parse)")
                             self.final_text.emit(corrected_text, 0.85)
-
                     except Exception as e:
-                        logger.error(f"Parser error: {e}")
+                        logger.error(f"Parser error (IFW): {e}")
+                        logger.info(f">> {text_out}")
                         self.final_text.emit(text_out, 0.85)
 
-                    try: os.remove(wav_path)
-                    except: pass
+                    try:
+                        os.remove(wav_path)
+                    except Exception:
+                        pass
 
                     self._emit_status_once("listening")
 
@@ -355,10 +409,13 @@ class InsanelyFastWhisperRecognizer(BaseSpeechRecognizer):
                     break
                 except Exception as e:
                     logger.error(f"Main loop error: {e}")
-                    self.error.emit(str(e))
+                    self.error.emit(f"Processing error: {e}")
                     time.sleep(0.1)
+                    continue
 
+        # On exit
         self._emit_status_once("stopped")
+        logger.info("InsanelyFastWhisper recognizer stopped")
         if hasattr(self, '_session_logger'):
             self._session_logger.log_end()
         if hasattr(self, '_session_log_sink_id'):
