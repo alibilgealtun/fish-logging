@@ -235,9 +235,35 @@ def _load_json_dataset(json_path: Path, audio_root: Path | None) -> List[Dataset
     except Exception as e:
         logger.error(f"Failed loading dataset json {json_path}: {e}")
         return samples
+
+    # Optional speakers mapping: try <stem>.speakers.json, then speakers.json in same dir
+    speakers_map: dict[str, dict[str, Any]] = {}
+    try:
+        candidates = [json_path.with_name(json_path.stem + ".speakers.json"), json_path.parent / "speakers.json"]
+        for sp in candidates:
+            if sp.exists():
+                with sp.open("r", encoding="utf-8") as sfp:
+                    raw = json.load(sfp) or {}
+                    if isinstance(raw, dict):
+                        # expect {"speaker_id": {accent:..., gender:..., ...}}
+                        speakers_map = {str(k): (v if isinstance(v, dict) else {}) for k, v in raw.items()}
+                        logger.info(f"Loaded speakers map from {sp} with {len(speakers_map)} entries")
+                        break
+    except Exception as e:
+        logger.warning(f"Failed reading speakers map: {e}")
+
     if not isinstance(data, list):
         logger.error(f"Dataset json must be a list of objects: {json_path}")
         return samples
+
+    def _derive_speaker_from_audio(rel_audio: str) -> str:
+        # use first path component if present
+        parts = Path(rel_audio).parts
+        if len(parts) > 1:
+            return parts[0]
+        # fallback to audio_root folder name or dataset name
+        return audio_root.name if audio_root else json_path.stem
+
     for entry in data:
         if not isinstance(entry, dict):
             continue
@@ -249,6 +275,23 @@ def _load_json_dataset(json_path: Path, audio_root: Path | None) -> List[Dataset
         if not audio_path.exists():
             logger.warning(f"JSON dataset audio missing: {audio_path}")
             continue
+
+        # speaker fields may be provided flat or nested under "speaker"
+        sp_obj = entry.get("speaker") if isinstance(entry.get("speaker"), dict) else {}
+        speaker_id = entry.get("speaker_id") or sp_obj.get("id") or _derive_speaker_from_audio(audio_name)
+        # look up defaults from speakers_map
+        sp_defaults = speakers_map.get(str(speaker_id), {}) if speakers_map else {}
+        accent = entry.get("accent") or sp_obj.get("accent") or sp_defaults.get("accent", "unknown")
+        gender = entry.get("gender") or sp_obj.get("gender") or sp_defaults.get("gender", "unk")
+        age = entry.get("age") or sp_obj.get("age") or sp_defaults.get("age", "unk")
+        recording_device = (
+            entry.get("recording_device")
+            or sp_obj.get("recording_device")
+            or sp_defaults.get("recording_device", "unk")
+        )
+        noise_type = entry.get("noise_type") or sp_obj.get("noise_type") or sp_defaults.get("noise_type", "clean")
+        snr_db = entry.get("snr_db") or sp_obj.get("snr_db") or sp_defaults.get("snr_db")
+
         try:
             dur = 0.0
             if sf is not None:
@@ -262,14 +305,14 @@ def _load_json_dataset(json_path: Path, audio_root: Path | None) -> List[Dataset
                     audio_path=audio_path,
                     expected_number=float(expected) if expected is not None else None,
                     duration=dur,
-                    meta={},
-                    speaker_id=audio_root.name if audio_root else json_path.stem,
-                    accent="unknown",
-                    gender="unk",
-                    age="unk",
-                    recording_device="unk",
-                    noise_type="clean",
-                    snr_db=None,
+                    meta=entry,
+                    speaker_id=str(speaker_id),
+                    accent=str(accent) if accent is not None else "unknown",
+                    gender=str(gender) if gender is not None else "unk",
+                    age=str(age) if age is not None else "unk",
+                    recording_device=str(recording_device) if recording_device is not None else "unk",
+                    noise_type=str(noise_type) if noise_type is not None else "clean",
+                    snr_db=float(snr_db) if (snr_db is not None and str(snr_db).strip() != "") else None,
                     raw_entry=entry,
                     source="json",
                 )
@@ -327,6 +370,10 @@ class StreamingSimulator:
 def _maybe_load_number_prefix(cfg: EvaluationConfig) -> tuple[Optional[np.ndarray], int]:
     if not cfg.concat_number:
         return None, 0
+    # If soundfile is unavailable, skip prefix to avoid None handling
+    if sf is None:
+        logger.warning("concat_number=True but soundfile is not installed; skipping number prefix")
+        return None, 0
     candidate_paths: List[Path] = []
     if cfg.number_audio_path:
         candidate_paths.append(Path(cfg.number_audio_path))
@@ -334,18 +381,17 @@ def _maybe_load_number_prefix(cfg: EvaluationConfig) -> tuple[Optional[np.ndarra
         # default search order
         if cfg.audio_root:
             candidate_paths.append(Path(cfg.audio_root) / "number.wav")
-        candidate_paths.append(Path("number_prefix.wav"))
-        candidate_paths.append(Path("tests/audio/number.wav"))
+        candidate_paths.append(Path("assets/audio/number.wav"))
     for p in candidate_paths:
         if p.exists():
             try:
-                n_audio, sr = sf.read(str(p), dtype='float32') if sf else (None, 0)
+                n_audio, sr = sf.read(str(p), dtype='float32')
                 if n_audio is None:
                     continue
                 if sr != 16000 and resample is not None:
                     n_audio = resample(n_audio, int(len(n_audio) * 16000 / sr))
                     sr = 16000
-                if n_audio.ndim > 1:
+                if hasattr(n_audio, 'ndim') and n_audio.ndim > 1:
                     n_audio = n_audio[:, 0]
                 logger.info(f"Using number prefix audio: {p}")
                 return n_audio.astype(np.float32), sr
@@ -409,6 +455,83 @@ class ASREvaluator:
             return str(result).strip()
         else:
             raise ValueError(f"Decoding not implemented for backend {name}")
+
+    def _decode_with_confidence(self, model, cfg: EvaluationConfig, audio: np.ndarray, sample_rate: int) -> tuple[str, Optional[float]]:
+        """Decode and return (text, avg_confidence) when available.
+        Heuristics:
+        - faster-whisper: use mean(exp(avg_logprob)) across segments if present
+        - whisperx: use mean(exp(avg_logprob)) across segments if present; else None
+        - dummy: fixed token with confidence 1.0
+        """
+        name = cfg.model.name.lower()
+        if name == "dummy":
+            return getattr(model, "token", "one"), 1.0
+        if name == "faster-whisper":
+            segments, _info = model.transcribe(
+                audio,
+                beam_size=cfg.inference_config.beam_size,
+                language=cfg.model.language,
+                condition_on_previous_text=cfg.inference_config.condition_on_previous_text,
+                vad_filter=cfg.inference_config.vad_filter,
+                vad_parameters=cfg.inference_config.vad_parameters,
+                without_timestamps=True,
+            )
+            texts = []
+            confs = []
+            import math as _m
+            for s in segments:
+                t = getattr(s, "text", "")
+                if t:
+                    texts.append(t)
+                al = getattr(s, "avg_logprob", None)
+                try:
+                    if al is not None:
+                        confs.append(max(0.0, min(1.0, float(_m.exp(float(al))))))
+                except Exception:
+                    pass
+            text = " ".join(texts).strip()
+            avg_conf = float(sum(confs) / len(confs)) if confs else None
+            return text, avg_conf
+        if name == "whisperx":
+            try:
+                result = model.transcribe(audio, language=cfg.model.language)
+            except TypeError:
+                result = model.transcribe(audio)
+            texts = []
+            confs = []
+            import math as _m
+            if isinstance(result, dict):
+                segs = result.get("segments") or []
+                for seg in segs:
+                    t = seg.get("text") if isinstance(seg, dict) else None
+                    if t:
+                        texts.append(t)
+                    al = seg.get("avg_logprob") if isinstance(seg, dict) else None
+                    try:
+                        if al is not None:
+                            confs.append(max(0.0, min(1.0, float(_m.exp(float(al))))))
+                    except Exception:
+                        pass
+                if not texts and "text" in result:
+                    txt = str(result.get("text", "")).strip()
+                    if txt:
+                        texts.append(txt)
+            elif isinstance(result, list):
+                for s in result:
+                    t = getattr(s, "text", str(s))
+                    if t:
+                        texts.append(t)
+                    al = getattr(s, "avg_logprob", None)
+                    try:
+                        if al is not None:
+                            confs.append(max(0.0, min(1.0, float(_m.exp(float(al))))))
+                    except Exception:
+                        pass
+            text = " ".join(texts).strip()
+            avg_conf = float(sum(confs) / len(confs)) if confs else None
+            return text, avg_conf
+        # Fallback to plain decode
+        return self._decode(model, cfg, audio, sample_rate), None
 
     def _get_dataset_samples(self, cfg: EvaluationConfig) -> List[DatasetSample]:
         # Priority 1: JSON dataset if provided
@@ -731,6 +854,7 @@ class ASREvaluator:
                     measurement_pred = None
 
                     tn = TextNormalizer()
+                    seg_conf_values: list[float] = []
 
                     for idx,(seg_arr, seg_start, seg_end) in enumerate(segment_list):
                         combined = np.concatenate((getattr(recognizer, '_number_sound', np.zeros(0, dtype=np.int16)), seg_arr))
@@ -753,6 +877,7 @@ class ASREvaluator:
                             confs = [getattr(s,'confidence',None) for s in segments if getattr(s,'confidence',None) is not None]
                             if confs:
                                 seg_conf = float(np.mean(confs))
+                                seg_conf_values.append(seg_conf)
                         except Exception:
                             pass
                         all_text_parts.append(raw_text)
@@ -850,6 +975,7 @@ class ASREvaluator:
                             "final_result_time": decode_end,
                             "is_aggregate": 0,
                             "is_measurement": 1 if parser_length_cm is not None else 0,
+                            "confidence": seg_conf,
                             "fish_prompt": getattr(recognizer, 'FISH_PROMPT', None),
                             "model_extra_json": json.dumps(cfg.extra, ensure_ascii=False, sort_keys=True),
                         })
@@ -859,6 +985,7 @@ class ASREvaluator:
                     aggregate_text = " ".join(t for t in all_text_parts if t).strip()
                     norm = self.normalizer.normalize(aggregate_text)
                     predicted_number = measurement_pred if measurement_pred is not None else norm.predicted_number
+                    agg_conf = float(np.mean(seg_conf_values)) if seg_conf_values else None
                     expected_text = "" if expected_number is None else str(expected_number)
                     wer = word_error_rate(norm.normalized_text, expected_text)
                     cer = char_error_rate(norm.normalized_text, expected_text)
@@ -922,6 +1049,7 @@ class ASREvaluator:
                         "final_result_time": None,
                         "is_aggregate": 1,
                         "is_measurement": 1 if measurement_pred is not None else 0,
+                        "confidence": agg_conf,
                         "fish_prompt": getattr(recognizer, 'FISH_PROMPT', None),
                         "model_extra_json": json.dumps(cfg.extra, ensure_ascii=False, sort_keys=True),
                     })
@@ -967,6 +1095,7 @@ class ASREvaluator:
                     except Exception:
                         pass
 
+                conf_holder = {"conf": None}
                 def _decode_fn(aud, sr_):
                     # Prepend number prefix if requested
                     if number_prefix is not None:
@@ -977,7 +1106,9 @@ class ASREvaluator:
                             aud = np.concatenate([pref, aud])
                         except Exception as e:
                             logger.debug(f"Prefix concat failed: {e}")
-                    return self._decode(model, cfg, aud, sr_)
+                    text, avg_conf = self._decode_with_confidence(model, cfg, aud, sr_)
+                    conf_holder["conf"] = avg_conf
+                    return text
 
                 timing = simulator.run(audio, sr, _decode_fn)
                 recognized_raw = timing["recognized_text_raw"]
@@ -1063,12 +1194,13 @@ class ASREvaluator:
                     "used_prefix": used_prefix_flag,
                     "number_range": number_range,
                     "final_display_text": None,
-                    "confidence": None,  # standard mode currently lacks per-segment confidence
-                    "fish_prompt": cfg.extra.get('fish_prompt'),
+                    "confidence": conf_holder["conf"],
+                    # remove fish_prompt from output rows; will also be dropped at write time if present elsewhere
+                    # "fish_prompt": cfg.extra.get('fish_prompt'),
                     "model_extra_json": json.dumps(cfg.extra, ensure_ascii=False, sort_keys=True),
                 }
                 rows.append(row)
-                _progress_log(sample.speaker_id, sample.audio_path.name, expected_number, predicted_number, nem, None)
+                _progress_log(sample.speaker_id, sample.audio_path.name, expected_number, predicted_number, nem, row["confidence"])
                 _detailed_sample_log(sample.audio_path.name, recognized_raw, parser_species, parser_length_cm, expected_number, predicted_number)
         df = pd.DataFrame(rows)
         if not df.empty:
@@ -1081,15 +1213,18 @@ class ASREvaluator:
         failures_path = self.output_dir / "failures.parquet"
         summary_path = self.output_dir / "summary.xlsx"
 
-        df.to_parquet(results_path, index=False)
-        failures = df[df["numeric_exact_match"] == 0]
+        # Drop columns requested for publication outputs
+        df_out = df.drop(columns=["final_display_text", "fish_prompt"], errors="ignore")
+
+        df_out.to_parquet(results_path, index=False)
+        failures = df_out[df_out["numeric_exact_match"] == 0]
         failures.to_parquet(failures_path, index=False)
 
         # Use only aggregate rows for summaries to avoid double counting
-        if "is_aggregate" in df.columns:
-            df_agg = df[df["is_aggregate"] == 1]
+        if "is_aggregate" in df_out.columns:
+            df_agg = df_out[df_out["is_aggregate"] == 1]
         else:
-            df_agg = df  # backward compatibility
+            df_agg = df_out  # backward compatibility
         # Aggregations
         agg_funcs = {
             "numeric_exact_match": "mean",
@@ -1100,7 +1235,8 @@ class ASREvaluator:
             "absolute_error": "mean",
             "RTF": ["mean"],
             "processing_time_s": ["mean"],
-            # confidence intentionally not aggregated (can add later)
+            "confidence": ["mean"],
+            # We could also include confidence aggregates if desired later
         }
         summary_model = df_agg.groupby(["model_name", "model_size"]).agg(agg_funcs)
         summary_accent = df_agg.groupby(["accent", "model_name", "model_size"]).agg(agg_funcs)
@@ -1134,7 +1270,7 @@ class ASREvaluator:
         else:
             summary_range = None
         with pd.ExcelWriter(summary_path, engine="openpyxl") as xl:
-            df.head(200).to_excel(xl, sheet_name="sample", index=False)
+            df_out.head(200).to_excel(xl, sheet_name="sample", index=False)
             summary_model.to_excel(xl, sheet_name="by_model")
             summary_accent.to_excel(xl, sheet_name="by_accent")
             summary_noise.to_excel(xl, sheet_name="by_noise")
@@ -1149,7 +1285,7 @@ class ASREvaluator:
         try:
             import platform, sys, datetime
             summary_meta = {
-                "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "created_at": datetime.datetime.now(datetime.UTC).isoformat(),
                 "python": sys.version.split()[0],
                 "platform": platform.platform(),
                 "total_rows": int(len(df)),

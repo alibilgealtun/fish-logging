@@ -1,0 +1,19 @@
+{
+  "speaker_1": {
+    "accent": "American",
+    "gender": "Male",
+    "age": "32",
+    "recording_device": "DJI Mic 2",
+    "noise_type": "clean",
+    "snr_db": null
+  },
+  "speaker_2": {
+    "accent": "Danish",
+    "gender": "Male",
+    "age": "27",
+    "recording_device": "DJI Mic 2",
+    "noise_type": "clean",
+    "snr_db": null
+  }
+}
+

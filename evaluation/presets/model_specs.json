@@ -1,13 +1,13 @@
 {
-  "dataset_json": "tests/data/numbers.json",
-  "audio_root": "tests/audio",
+  "dataset_json": "evaluation/datasets/clean_numbers.json",
+  "audio_root": "audio/evaluation/clean/numbers",
   "concat_number": true,
   "production_replay": false,
   "model_specs": [
     {
       "name": "faster-whisper",
       "sizes": [
-        "medium.en"
+        "base.en"
       ],
       "compute_types": [
         "int8"
@@ -19,7 +19,7 @@
         5
       ],
       "chunks": [
-        100
+        500
       ],
       "vad_modes": [
         2
@@ -28,9 +28,9 @@
         "en"
       ],
       "min_speech_s": [
-        0.25
+        0.2
       ],
-      "max_segment_s": 3.5,
+      "max_segment_s": 4,
       "sample_rate": 16000,
       "chunk_s": 0.5,
       "padding_ms": 600,

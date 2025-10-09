@@ -36,18 +36,41 @@ def _levenshtein(a: str, b: str) -> int:
     return dp[n]
 
 
+def _edit_distance_tokens(hyp_tokens: List[str], ref_tokens: List[str]) -> int:
+    """Classic Wagner-Fischer DP over tokens (insertions, deletions, substitutions all cost 1)."""
+    m, n = len(hyp_tokens), len(ref_tokens)
+    if m == 0:
+        return n
+    if n == 0:
+        return m
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(m + 1):
+        dp[i][0] = i
+    for j in range(n + 1):
+        dp[0][j] = j
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            cost = 0 if hyp_tokens[i - 1] == ref_tokens[j - 1] else 1
+            dp[i][j] = min(
+                dp[i - 1][j] + 1,      # deletion
+                dp[i][j - 1] + 1,      # insertion
+                dp[i - 1][j - 1] + cost  # substitution
+            )
+    return dp[m][n]
+
+
 def word_error_rate(hyp: str, ref: str) -> float:
     """Compute WER given hypothesis and reference strings.
 
-    Tokenization is simple whitespace split which is adequate for numeric tokens.
+    WER = (S + D + I) / N, computed via token-level edit distance.
+    Tokenization uses simple whitespace split which is adequate for numeric tokens.
     Returns 0.0 if reference is empty (defined as perfect if hypothesis also empty, else 1.0).
     """
     ref_tokens = ref.strip().split()
     hyp_tokens = hyp.strip().split()
     if not ref_tokens:
         return 0.0 if not hyp_tokens else 1.0
-    dist = _levenshtein(" ".join(hyp_tokens), " ".join(ref_tokens))  # approximate using char distance between token strings
-    # More precise WER uses dynamic alignment over tokens; we can adapt by joining with \0 sentinel to avoid collisions
+    dist = _edit_distance_tokens(hyp_tokens, ref_tokens)
     return dist / max(len(ref_tokens), 1)
 
 
@@ -60,17 +83,29 @@ def char_error_rate(hyp: str, ref: str) -> float:
     return dist / max(len(ref_clean), 1)
 
 
+def _number_to_digit_string(x: Optional[float]) -> str:
+    if x is None:
+        return ""
+    # Canonicalize float: trim trailing zeros and dot; then keep only digits
+    s = f"{x:.6f}".rstrip("0").rstrip(".")
+    return "".join(ch for ch in s if ch.isdigit())
+
+
 def digit_error_rate(pred_number: Optional[float], ref_number: Optional[float]) -> float:
-    """Digit error rate between two numbers considering only digits (ignores decimal point).
+    """Digit error rate between two numeric values based on digit sequences.
+    Ignores decimal point and non-digits; compares canonicalized digits via Levenshtein.
     If reference is None returns 0 if pred is also None else 1.
     """
     if ref_number is None:
         return 0.0 if pred_number is None else 1.0
-    ref_digits = str(ref_number).replace(".", "")
-    pred_digits = "" if pred_number is None else str(pred_number).replace(".", "")
+    ref_digits = _number_to_digit_string(ref_number)
+    pred_digits = _number_to_digit_string(pred_number)
     if not ref_digits:
         return 0.0 if not pred_digits else 1.0
-    dist = _levenshtein(pred_digits, ref_digits)
+    if Levenshtein is not None:
+        dist = int(Levenshtein.distance(pred_digits, ref_digits))  # type: ignore[attr-defined]
+    else:
+        dist = _levenshtein(pred_digits, ref_digits)
     return dist / len(ref_digits)
 
 
@@ -114,4 +149,3 @@ def compute_percentiles(values: List[float]) -> Percentiles:
         d1 = vs[c] * (k - f)
         return d0 + d1
     return Percentiles(p50=_pct(0.5), p95=_pct(0.95), p99=_pct(0.99))
-
