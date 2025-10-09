@@ -98,7 +98,7 @@ class WhisperRecognizer(BaseSpeechRecognizer):
 
         # Load number marker
         try:
-            self._number_sound, _ = sf.read("tests/audio/number.wav", dtype='int16')
+            self._number_sound, _ = sf.read("number.wav", dtype='int16')
         except Exception:
             self._number_sound = (np.zeros(int(self.SAMPLE_RATE * 0.05))).astype(np.int16)
 
@@ -123,6 +123,11 @@ class WhisperRecognizer(BaseSpeechRecognizer):
     def stop(self) -> None:
         """Request the recognizer to stop and release resources."""
         self._stop_flag = True
+        try:
+            # Cooperatively interrupt thread
+            self.requestInterruption()
+        except Exception:
+            pass
         try:
             if self._stream is not None:
                 # Import here to avoid module import overhead unless needed
@@ -245,6 +250,9 @@ class WhisperRecognizer(BaseSpeechRecognizer):
     # ---------- Thread main ----------
     def run(self) -> None:
         """Run the realtime STT loop with integrated noise control."""
+        # Exit early if interruption/stop was requested before thread started
+        if self.is_stopped() or self.isInterruptionRequested():
+            return
         try:
             logger.info("Loading model... (first run will download it)")
             # Local import to avoid loading at module import time
@@ -257,6 +265,9 @@ class WhisperRecognizer(BaseSpeechRecognizer):
                 download_root=None,
                 local_files_only=False
             )
+            # If app requested interruption while loading model, exit immediately
+            if self.is_stopped() or self.isInterruptionRequested():
+                return
         except Exception as e:
             msg = f"Failed to load Whisper model: {e}"
             logger.error(msg)
@@ -268,6 +279,8 @@ class WhisperRecognizer(BaseSpeechRecognizer):
         try:
             # Local import to avoid loading at module import time
             import sounddevice as sd  # type: ignore
+            if self.is_stopped() or self.isInterruptionRequested():
+                return
             self._stream = sd.InputStream(
                 samplerate=self.SAMPLE_RATE,
                 channels=self.CHANNELS,
@@ -293,6 +306,9 @@ class WhisperRecognizer(BaseSpeechRecognizer):
             )
 
             while not self.is_stopped():
+                # Honor external interruption requests
+                if self.isInterruptionRequested():
+                    break
                 try:
                     # Get filtered and VAD-processed segment
                     segment = next(segment_generator)

@@ -79,7 +79,6 @@ class MainWindow(QMainWindow):
                     engine,
                     numbers_only=numbers_only,
                     noise_profile=selected_profile,
-                    save_audio_segments=getattr(self.speech_recognizer, "_save_audio_segments", False),
                 )
                 # Reconnect signals to new instance
                 self._connect_signals()
@@ -574,10 +573,27 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         try:
+            # Request cooperative shutdown first
+            try:
+                if hasattr(self.speech_recognizer, 'requestInterruption'):
+                    self.speech_recognizer.requestInterruption()
+            except Exception:
+                pass
             self.speech_recognizer.stop()
             # Wait for the recognizer thread to finish before closing
             if self.speech_recognizer.isRunning():
-                self.speech_recognizer.wait(3000)  # Wait up to 3 seconds
+                finished = self.speech_recognizer.wait(6000)  # Wait up to 6 seconds
+                if not finished and self.speech_recognizer.isRunning():
+                    # Last-resort: force termination to avoid qFatal on destruction
+                    logger.warning("Recognizer thread still running on close; forcing terminate()")
+                    try:
+                        self.speech_recognizer.terminate()
+                    except Exception:
+                        pass
+                    try:
+                        self.speech_recognizer.wait(2000)
+                    except Exception:
+                        pass
         except Exception as e:
             logger.debug(f"Error during closeEvent: {e}")
         return super().closeEvent(event)
@@ -637,6 +653,11 @@ class MainWindow(QMainWindow):
             # Stop current recognizer and wait for clean shutdown (longer timeout for first model download)
             old_recognizer = self.speech_recognizer
             try:
+                if hasattr(old_recognizer, 'requestInterruption'):
+                    old_recognizer.requestInterruption()
+            except Exception:
+                pass
+            try:
                 old_recognizer.stop()
             except Exception:
                 pass
@@ -652,7 +673,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             # Create new recognizer instance with updated profile (only after confirmed stopped)
-            new_recognizer = create_recognizer(engine, numbers_only=numbers_only, noise_profile=profile_key, save_audio_segments=False)
+            new_recognizer = create_recognizer(engine, numbers_only=numbers_only, noise_profile=profile_key)
             self.speech_recognizer = new_recognizer
             self._connect_signals()
             # Start it

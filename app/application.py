@@ -99,13 +99,30 @@ class Application:
             # Stop recognizer thread if still alive
             if self.recognizer is not None:
                 try:
+                    # Politely request interruption/stop
+                    if hasattr(self.recognizer, "requestInterruption"):
+                        try:
+                            self.recognizer.requestInterruption()  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
                     self.recognizer.stop()
                 except Exception as e:
                     logger.debug(f"Recognizer stop() raised: {e}")
-                # Wait briefly for thread termination
+                # Wait for thread termination with a bounded timeout
                 try:
                     if getattr(self.recognizer, 'isRunning', lambda: False)():
-                        self.recognizer.wait(5000)
+                        finished = self.recognizer.wait(8000)
+                        if not finished and getattr(self.recognizer, 'isRunning', lambda: False)():
+                            # Last-resort: force termination to avoid qFatal on destruction
+                            logger.warning("Recognizer thread did not exit in time; forcing terminate()")
+                            try:
+                                self.recognizer.terminate()  # type: ignore[attr-defined]
+                            except Exception:
+                                pass
+                            try:
+                                self.recognizer.wait(4000)
+                            except Exception:
+                                pass
                 except Exception as e:
                     logger.debug(f"Recognizer wait() raised: {e}")
         except Exception:
@@ -113,6 +130,11 @@ class Application:
         # Log session end (idempotent)
         try:
             SessionLogger.get().log_end()
+        except Exception:
+            pass
+        # Drop reference so Python GC order doesn't try to delete a still-running thread
+        try:
+            self.recognizer = None  # type: ignore[assignment]
         except Exception:
             pass
 

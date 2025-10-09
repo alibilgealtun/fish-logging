@@ -48,8 +48,13 @@ class BaseSpeechRecognizer(QThread):
             self.start()
 
     def stop(self) -> None:
-        """Requests the recognizer to stop."""
+        """Requests the recognizer to stop and interrupts the QThread event loop."""
         self._stop_flag = True
+        try:
+            # Notify QThread cooperatively
+            self.requestInterruption()
+        except Exception:
+            pass
 
     def is_stopped(self) -> bool:
         """Returns True if a stop has been requested."""
@@ -73,7 +78,16 @@ class BaseSpeechRecognizer(QThread):
                 except Exception:
                     pass
                 try:
-                    self.wait(2000)
+                    if not self.wait(2000):
+                        # Last resort: avoid qFatal by terminating
+                        try:
+                            self.terminate()  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                        try:
+                            self.wait(1000)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
         except Exception:

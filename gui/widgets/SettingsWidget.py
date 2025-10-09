@@ -72,6 +72,45 @@ class SettingsWidget(QWidget):
         # Allow future user-driven noise profile changes to emit
         self._suppress_profile_signal = False
 
+    def closeEvent(self, event):  # type: ignore[override]
+        """Ensure the background backup thread is stopped before widget is destroyed."""
+        try:
+            if self._thread is not None and self._thread.isRunning():
+                try:
+                    # Ask the thread's event loop to exit (worker may finish soon)
+                    self._thread.quit()
+                except Exception:
+                    pass
+                try:
+                    # Wait a bit for graceful shutdown
+                    if not self._thread.wait(3000):
+                        # Last resort: force termination to prevent Qt abort
+                        logger.warning("Settings backup thread still running on close; forcing terminate()")
+                        try:
+                            self._thread.terminate()
+                        except Exception:
+                            pass
+                        try:
+                            self._thread.wait(1000)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        finally:
+            try:
+                if self._worker is not None:
+                    self._worker.deleteLater()
+            except Exception:
+                pass
+            try:
+                if self._thread is not None:
+                    self._thread.deleteLater()
+            except Exception:
+                pass
+            self._worker = None
+            self._thread = None
+        return super().closeEvent(event)
+
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
