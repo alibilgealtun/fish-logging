@@ -17,10 +17,13 @@ class SpeechConfig:
     numbers_only: bool
     model_path: Optional[str] = None
     language: str = "en"
+    noise_profile: str = "mixed"  # clean | human | engine | mixed
 
     def __post_init__(self):
         if self.engine not in ("whisper", "whisperx", "vosk", "google"):
             raise ValueError(f"Invalid engine: {self.engine}")
+        if self.noise_profile not in {"clean", "human", "engine", "mixed"}:
+            raise ValueError(f"Invalid noise_profile: {self.noise_profile}")
 
 
 @dataclass(frozen=True)
@@ -29,6 +32,13 @@ class DatabaseConfig:
     excel_output_path: str = "logs/hauls/logs.xlsx"
     session_log_dir: str = "logs/sessions"
     backup_enabled: bool = True
+
+
+@dataclass(frozen=True)
+class AudioConfig:
+    """Audio storage configuration."""
+    segments_dir: str = "audio/segments"
+    save_segments: bool = False  # Enable/disable saving audio segments
 
 
 @dataclass(frozen=True)
@@ -44,6 +54,7 @@ class AppConfig:
     """Complete application configuration."""
     speech: SpeechConfig
     database: DatabaseConfig
+    audio: AudioConfig
     ui: UIConfig
 
     # Loaded from JSON files
@@ -91,11 +102,16 @@ class ConfigLoader:
                 "engine": "whisper",
                 "numbers_only": False,
                 "language": "en",
+                "noise_profile": "mixed",
             },
             "database": {
                 "excel_output_path": "logs/hauls/logs.xlsx",
                 "session_log_dir": "logs/sessions",
                 "backup_enabled": True,
+            },
+            "audio": {
+                "segments_dir": "audio/segments",
+                "save_segments": False,
             },
             "ui": {
                 "theme": "default",
@@ -154,6 +170,12 @@ class ConfigLoader:
             if isinstance(speech_overrides, dict):
                 speech_overrides["language"] = speech_language
 
+        noise_profile = os.getenv("SPEECH_NOISE_PROFILE")
+        if noise_profile:
+            speech_overrides = overrides.setdefault("speech", {})
+            if isinstance(speech_overrides, dict):
+                speech_overrides["noise_profile"] = noise_profile
+
         # Debug and logging
         if self._env_bool("DEBUG"):
             overrides["debug"] = True
@@ -179,6 +201,11 @@ class ConfigLoader:
             help="Enable numbers-only mode"
         )
         parser.add_argument(
+            "--noise-profile",
+            choices=["clean", "human", "engine", "mixed"],
+            help="Noise environment profile (defaults to mixed)"
+        )
+        parser.add_argument(
             "--debug",
             action="store_true",
             help="Enable debug mode"
@@ -187,6 +214,11 @@ class ConfigLoader:
             "--log-level",
             choices=["DEBUG", "INFO", "WARNING", "ERROR"],
             help="Set logging level"
+        )
+        parser.add_argument(
+            "--save-audio",
+            action="store_true",
+            help="Save audio segments to disk for debugging/analysis"
         )
 
         known, unknown = parser.parse_known_args(argv)
@@ -200,10 +232,18 @@ class ConfigLoader:
             speech_overrides = overrides.setdefault("speech", {})
             if isinstance(speech_overrides, dict):
                 speech_overrides["numbers_only"] = True
+        if known.noise_profile:
+            speech_overrides = overrides.setdefault("speech", {})
+            if isinstance(speech_overrides, dict):
+                speech_overrides["noise_profile"] = known.noise_profile
         if known.debug:
             overrides["debug"] = True
         if known.log_level:
             overrides["log_level"] = known.log_level
+        if known.save_audio:
+            audio_overrides = overrides.setdefault("audio", {})
+            if isinstance(audio_overrides, dict):
+                audio_overrides["save_segments"] = True
 
         return overrides, unknown
 
@@ -212,12 +252,14 @@ class ConfigLoader:
         # Extract nested configs
         speech_config = SpeechConfig(**config_dict.get("speech", {}))
         database_config = DatabaseConfig(**config_dict.get("database", {}))
+        audio_config = AudioConfig(**config_dict.get("audio", {}))
         ui_config = UIConfig(**config_dict.get("ui", {}))
 
         # Build main config
         return AppConfig(
             speech=speech_config,
             database=database_config,
+            audio=audio_config,
             ui=ui_config,
             asr_corrections=config_dict.get("asr_corrections", {}),
             species_data=config_dict.get("species_data", {}),
@@ -257,4 +299,4 @@ def parse_app_args(argv: List[str]) -> Tuple[AppConfig, List[str]]:
     return loader.load(argv)
 
 
-__all__ = ["AppConfig", "SpeechConfig", "DatabaseConfig", "UIConfig", "ConfigLoader", "parse_app_args"]
+__all__ = ["AppConfig", "SpeechConfig", "DatabaseConfig", "AudioConfig", "UIConfig", "ConfigLoader", "parse_app_args"]

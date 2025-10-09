@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import sys
 import threading
+import signal
+import atexit
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -23,6 +25,8 @@ class Application:
         self.session = SessionLogger.get()
         self.excel_logger = ExcelLogger()
         self._setup_exception_handling()
+        # Ensure cleanup runs even if GUI not closed cleanly
+        atexit.register(self.cleanup)
 
     def _setup_exception_handling(self) -> None:
         """Configure global exception handling for main and worker threads."""
@@ -33,7 +37,10 @@ class Application:
                 logger.error("Uncaught exception:\n{}", tb)
                 self.session.log(tb)
             finally:
-                sys.__excepthook__(exc_type, exc_value, exc_traceback)
+                try:
+                    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+                except Exception:
+                    pass
 
         def thread_excepthook(args: threading.ExceptHookArgs) -> None:
             excepthook(args.exc_type, args.exc_value, args.exc_traceback)
@@ -58,11 +65,85 @@ class Application:
     def create_qt_app(self, qt_args: list[str]) -> QApplication:
         """Create and configure the Qt application."""
         app = QApplication(qt_args)
-        app.aboutToQuit.connect(lambda: SessionLogger.get().log_end())
+        # Replace previous simple aboutToQuit hook with full cleanup
+        app.aboutToQuit.connect(self.cleanup)
+        # Install signal handlers for SIGINT/SIGTERM to allow Ctrl+C graceful shutdown
+        self._install_signal_handlers(app)
         return app
+
+    def _install_signal_handlers(self, app: QApplication) -> None:
+        """Install POSIX signal handlers to ensure graceful shutdown on Ctrl+C / kill.
+
+        Also handles SIGHUP (common when closing the terminal on macOS/Linux)
+        and SIGQUIT so the app can clean up QThreads before process teardown.
+        """
+        def _handle(signum, frame):  # type: ignore[override]
+            try:
+                logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+            except Exception:
+                pass
+            try:
+                self.cleanup()
+            finally:
+                try:
+                    app.quit()
+                except Exception:
+                    pass
+        for sig_name in ("SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"):
+            sig = getattr(signal, sig_name, None)
+            if sig is not None:
+                try:
+                    signal.signal(sig, _handle)
+                except Exception:
+                    # Some environments (like embedded interpreters) may not allow this
+                    pass
+
+    def cleanup(self) -> None:
+        """Best-effort graceful shutdown of long-running resources / threads."""
+        try:
+            # Stop recognizer thread if still alive
+            if self.recognizer is not None:
+                try:
+                    # Politely request interruption/stop
+                    if hasattr(self.recognizer, "requestInterruption"):
+                        try:
+                            self.recognizer.requestInterruption()  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                    self.recognizer.stop()
+                except Exception as e:
+                    logger.debug(f"Recognizer stop() raised: {e}")
+                # Wait for thread termination with a bounded timeout
+                try:
+                    if getattr(self.recognizer, 'isRunning', lambda: False)():
+                        finished = self.recognizer.wait(8000)
+                        if not finished and getattr(self.recognizer, 'isRunning', lambda: False)():
+                            # Last-resort: force termination to avoid qFatal on destruction
+                            logger.warning("Recognizer thread did not exit in time; forcing terminate()")
+                            try:
+                                self.recognizer.terminate()  # type: ignore[attr-defined]
+                            except Exception:
+                                pass
+                            try:
+                                self.recognizer.wait(4000)
+                            except Exception:
+                                pass
+                except Exception as e:
+                    logger.debug(f"Recognizer wait() raised: {e}")
+        except Exception:
+            pass
+        # Log session end (idempotent)
+        try:
+            SessionLogger.get().log_end()
+        except Exception:
+            pass
+        # Drop reference so Python GC order doesn't try to delete a still-running thread
+        try:
+            self.recognizer = None  # type: ignore[assignment]
+        except Exception:
+            pass
 
     def create_main_window(self):
         """Create the main application window."""
-        # Import here to avoid pulling Qt in tests
-        from gui.MainWindow import MainWindow
+        from gui.MainWindow import MainWindow  # local import to avoid PyQt in tests
         return MainWindow(self.recognizer, self.excel_logger)

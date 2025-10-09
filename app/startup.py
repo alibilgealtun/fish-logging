@@ -8,6 +8,7 @@ from loguru import logger
 from app.application import Application
 from config.config import parse_app_args
 from speech.factory import create_recognizer
+from services import initialize_audio_saver
 
 
 def run_application() -> None:
@@ -15,16 +16,27 @@ def run_application() -> None:
     # Parse configuration
     config, unknown_args = parse_app_args(sys.argv[1:])
     
-    # Create recognizer with fallback
-    recognizer = _create_recognizer_with_fallback(config.speech.engine, config.speech.numbers_only)
-    
+    # Initialize audio saver service
+    initialize_audio_saver(
+        segments_dir=config.audio.segments_dir,
+        enabled=config.audio.save_segments
+    )
+
+    # Create recognizer with fallback, including noise profile selection
+    recognizer = _create_recognizer_with_fallback(
+        config.speech.engine,
+        config.speech.numbers_only,
+        config.speech.noise_profile,
+    )
+
     # Initialize application
     app_instance = Application(recognizer)
     
-    # Log session configuration
+    # Log session configuration (include noise profile)
     app_instance.log_session_info({
         "engine": config.speech.engine,
         "numbers_only": config.speech.numbers_only,
+        "noise_profile": config.speech.noise_profile,
     })
     
     # Create Qt application
@@ -39,10 +51,10 @@ def run_application() -> None:
     sys.exit(qt_app.exec())
 
 
-def _create_recognizer_with_fallback(engine: str, numbers_only: bool):
+def _create_recognizer_with_fallback(engine: str, numbers_only: bool, noise_profile: str):
     """Create recognizer with fallback to whisper if the requested engine fails."""
     try:
-        return create_recognizer(engine, numbers_only=numbers_only)
+        return create_recognizer(engine, numbers_only=numbers_only, noise_profile=noise_profile)
     except Exception:
         logger.exception("Failed to create recognizer with engine {}. Falling back to whisper.", engine)
-        return create_recognizer("whisper", numbers_only=False)
+        return create_recognizer("whisper", numbers_only=False, noise_profile=noise_profile)
