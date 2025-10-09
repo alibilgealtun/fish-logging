@@ -67,6 +67,14 @@ class SettingsWidget(QWidget):
         self._load_saved_noise_profile()
         # Re-enable emission after event loop starts to ensure recognizer is fully initialized
         QTimer.singleShot(0, self._enable_profile_signal)
+        # Ensure background QThread is stopped if app quits due to OS signals
+        try:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is not None:
+                app.aboutToQuit.connect(self._on_app_quit)
+        except Exception:
+            pass
 
     def _enable_profile_signal(self) -> None:
         # Allow future user-driven noise profile changes to emit
@@ -421,3 +429,39 @@ class SettingsWidget(QWidget):
                 logger.info(f"Noise profile changed to {key}")
         except Exception as e:
             logger.error(f"Failed to emit noise profile change: {e}")
+
+    def _on_app_quit(self) -> None:
+        """App-wide quit hook: stop and clean up the backup thread if running."""
+        try:
+            th = getattr(self, "_thread", None)
+            if th is not None and th.isRunning():
+                try:
+                    th.quit()
+                except Exception:
+                    pass
+                try:
+                    if not th.wait(2000):
+                        try:
+                            th.terminate()
+                        except Exception:
+                            pass
+                        try:
+                            th.wait(800)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        finally:
+            try:
+                if getattr(self, "_worker", None) is not None:
+                    self._worker.deleteLater()
+            except Exception:
+                pass
+            try:
+                if getattr(self, "_thread", None) is not None:
+                    self._thread.deleteLater()
+            except Exception:
+                pass
+            self._worker = None
+            self._thread = None
+

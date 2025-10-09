@@ -99,7 +99,9 @@ class WhisperRecognizer(BaseSpeechRecognizer):
         # Load number marker
         try:
             self._number_sound, _ = sf.read("number.wav", dtype='int16')
-        except Exception:
+            logger.info("NUMBERR++++++++++++++++++")
+        except Exception as e:
+            logger.debug("NUMBER SOUND", e)
             self._number_sound = (np.zeros(int(self.SAMPLE_RATE * 0.05))).astype(np.int16)
 
         # Apply profile overrides
@@ -323,15 +325,15 @@ class WhisperRecognizer(BaseSpeechRecognizer):
 
                     # Update status
                     self._emit_status_once("processing")
-
-                    # COMBINE NUMBER SOUND WITH SEGMENT!!! IMPORTANT PART
-                    combined_segment = np.concatenate((self._number_sound, segment))
+                    logger.debug(f"Segment duration before concatting: {segment_duration}")
+                    segment = np.concatenate((self._number_sound, segment))
+                    logger.debug(f"Segment duration after concatting: {(segment.size / self.SAMPLE_RATE)}")
                     # Write segment to temporary file
-                    wav_path = self._write_wav_bytes(combined_segment, self.SAMPLE_RATE)
+                    wav_path = self._write_wav_bytes(segment, self.SAMPLE_RATE)
 
                     # Save the audio segment to file (for debugging/inspection)
                     audio_saver = get_audio_saver()
-                    audio_saver.save_segment(combined_segment, self.SAMPLE_RATE)
+                    audio_saver.save_segment(segment, self.SAMPLE_RATE)
 
                     try:
                         assert self._model is not None

@@ -72,7 +72,11 @@ class Application:
         return app
 
     def _install_signal_handlers(self, app: QApplication) -> None:
-        """Install POSIX signal handlers to ensure graceful shutdown on Ctrl+C / kill."""
+        """Install POSIX signal handlers to ensure graceful shutdown on Ctrl+C / kill.
+
+        Also handles SIGHUP (common when closing the terminal on macOS/Linux)
+        and SIGQUIT so the app can clean up QThreads before process teardown.
+        """
         def _handle(signum, frame):  # type: ignore[override]
             try:
                 logger.info(f"Received signal {signum}, initiating graceful shutdown...")
@@ -85,7 +89,8 @@ class Application:
                     app.quit()
                 except Exception:
                     pass
-        for sig in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
+        for sig_name in ("SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"):
+            sig = getattr(signal, sig_name, None)
             if sig is not None:
                 try:
                     signal.signal(sig, _handle)
