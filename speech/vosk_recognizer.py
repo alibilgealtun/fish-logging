@@ -62,13 +62,22 @@ class VoskRecognizer(BaseSpeechRecognizer):
             if attr in prof:
                 setattr(self, attr, prof[attr])
         suppressor_cfg = make_suppressor_config(prof, self.SAMPLE_RATE)
-        self._noise_controller = NoiseController(
-            sample_rate=self.SAMPLE_RATE,
-            vad_mode=self.VAD_MODE,
-            min_speech_s=self.MIN_SPEECH_S,
-            max_segment_s=self.MAX_SEGMENT_S,
-            suppressor_config=suppressor_cfg,
-        )
+        if self._noise_profile_name == "clean":
+            from noise.simple_controller import SimpleNoiseController
+            self._noise_controller = SimpleNoiseController(
+                sample_rate=self.SAMPLE_RATE,
+                vad_mode=self.VAD_MODE,
+                min_speech_s=self.MIN_SPEECH_S,
+                max_segment_s=self.MAX_SEGMENT_S,
+            )
+        else:
+            self._noise_controller = NoiseController(
+                sample_rate=self.SAMPLE_RATE,
+                vad_mode=self.VAD_MODE,
+                min_speech_s=self.MIN_SPEECH_S,
+                max_segment_s=self.MAX_SEGMENT_S,
+                suppressor_config=suppressor_cfg,
+            )
 
     def stop(self) -> None:
         self._stop_flag = True
@@ -92,13 +101,22 @@ class VoskRecognizer(BaseSpeechRecognizer):
             if attr in prof:
                 setattr(self, attr, prof[attr])
         suppressor_cfg = make_suppressor_config(prof, self.SAMPLE_RATE)
-        self._noise_controller = NoiseController(
-            sample_rate=self.SAMPLE_RATE,
-            vad_mode=self.VAD_MODE,
-            min_speech_s=self.MIN_SPEECH_S,
-            max_segment_s=self.MAX_SEGMENT_S,
-            suppressor_config=suppressor_cfg,
-        )
+        if self._noise_profile_name == "clean":
+            from noise.simple_controller import SimpleNoiseController
+            self._noise_controller = SimpleNoiseController(
+                sample_rate=self.SAMPLE_RATE,
+                vad_mode=self.VAD_MODE,
+                min_speech_s=self.MIN_SPEECH_S,
+                max_segment_s=self.MAX_SEGMENT_S,
+            )
+        else:
+            self._noise_controller = NoiseController(
+                sample_rate=self.SAMPLE_RATE,
+                vad_mode=self.VAD_MODE,
+                min_speech_s=self.MIN_SPEECH_S,
+                max_segment_s=self.MAX_SEGMENT_S,
+                suppressor_config=suppressor_cfg,
+            )
         if not self.isRunning():
             try:
                 self.start()

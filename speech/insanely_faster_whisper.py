@@ -105,13 +105,22 @@ class InsanelyFastWhisperRecognizer(BaseSpeechRecognizer):
             if attr in prof:
                 setattr(self, attr, prof[attr])
         suppressor_cfg = make_suppressor_config(prof, self.SAMPLE_RATE)
-        self._noise_controller = NoiseController(
-            sample_rate=self.SAMPLE_RATE,
-            vad_mode=self.VAD_MODE,
-            min_speech_s=self.MIN_SPEECH_S,
-            max_segment_s=self.MAX_SEGMENT_S,
-            suppressor_config=suppressor_cfg,
-        )
+        if self._noise_profile_name == "clean":
+            from noise.simple_controller import SimpleNoiseController
+            self._noise_controller = SimpleNoiseController(
+                sample_rate=self.SAMPLE_RATE,
+                vad_mode=self.VAD_MODE,
+                min_speech_s=self.MIN_SPEECH_S,
+                max_segment_s=self.MAX_SEGMENT_S,
+            )
+        else:
+            self._noise_controller = NoiseController(
+                sample_rate=self.SAMPLE_RATE,
+                vad_mode=self.VAD_MODE,
+                min_speech_s=self.MIN_SPEECH_S,
+                max_segment_s=self.MAX_SEGMENT_S,
+                suppressor_config=suppressor_cfg,
+            )
 
     def _load_number_prefix(self) -> np.ndarray:
         """Load and prepare the number prefix audio as PCM16 mono at SAMPLE_RATE."""
@@ -167,13 +176,22 @@ class InsanelyFastWhisperRecognizer(BaseSpeechRecognizer):
             if attr in prof:
                 setattr(self, attr, prof[attr])
         suppressor_cfg = make_suppressor_config(prof, self.SAMPLE_RATE)
-        self._noise_controller = NoiseController(
-            sample_rate=self.SAMPLE_RATE,
-            vad_mode=self.VAD_MODE,
-            min_speech_s=self.MIN_SPEECH_S,
-            max_segment_s=self.MAX_SEGMENT_S,
-            suppressor_config=suppressor_cfg,
-        )
+        if self._noise_profile_name == "clean":
+            from noise.simple_controller import SimpleNoiseController
+            self._noise_controller = SimpleNoiseController(
+                sample_rate=self.SAMPLE_RATE,
+                vad_mode=self.VAD_MODE,
+                min_speech_s=self.MIN_SPEECH_S,
+                max_segment_s=self.MAX_SEGMENT_S,
+            )
+        else:
+            self._noise_controller = NoiseController(
+                sample_rate=self.SAMPLE_RATE,
+                vad_mode=self.VAD_MODE,
+                min_speech_s=self.MIN_SPEECH_S,
+                max_segment_s=self.MAX_SEGMENT_S,
+                suppressor_config=suppressor_cfg,
+            )
         from logger.session_logger import SessionLogger
         self._session_logger = SessionLogger()
         self._session_logger.log_start(self.get_config())
