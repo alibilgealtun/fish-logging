@@ -615,17 +615,34 @@ class ASREvaluator:
                         logger.info(f"Applied recognizer overrides: {', '.join(overrides_applied)}")
                 except Exception as e:
                     logger.debug(f"Recognizer override error: {e}")
-                # Force model load
+                # Force model load (model is loaded in run() method, so we need to load it manually here)
                 try:
-                    recognizer._load_backend_model()  # type: ignore
-                    recognizer._backend_post_init()  # type: ignore
+                    if engine == "whisper":
+                        from faster_whisper import WhisperModel  # type: ignore
+                        recognizer._model = WhisperModel(
+                            recognizer.MODEL_NAME,
+                            device=recognizer.DEVICE,
+                            compute_type=recognizer.COMPUTE_TYPE,
+                            download_root=None,
+                            local_files_only=False
+                        )
+                        logger.info(f"Loaded faster-whisper model: {recognizer.MODEL_NAME}")
+                    elif engine == "whisperx":
+                        import whisperx  # type: ignore
+                        recognizer._model = whisperx.load_model(
+                            recognizer.MODEL_NAME,
+                            device=recognizer.DEVICE,
+                            compute_type=recognizer.COMPUTE_TYPE
+                        )
+                        logger.info(f"Loaded whisperx model: {recognizer.MODEL_NAME}")
                 except Exception as e:
-                    logger.error(f"Recognizer backend load failed: {e}")
+                    logger.error(f"Recognizer model load failed: {e}")
                     continue
 
                 from noise.controller import NoiseController  # local import
 
-                for sample in tqdm(samples, desc=f"{cfg.model.name}-{cfg.model.size}", bar_format="{desc} {n_fmt}/{total_fmt}", ncols=28):
+                total_samples = len(samples)
+                for sample_idx, sample in enumerate(tqdm(samples, desc=f"{cfg.model.name}-{cfg.model.size}", bar_format="{desc} {n_fmt}/{total_fmt}", ncols=28), start=1):
                     try:
                         audio, sr = _load_audio(sample.audio_path)
                     except Exception as e:
@@ -679,14 +696,24 @@ class ASREvaluator:
 
                     if not segment_list:
                         logger.debug(f"No segments for {sample.audio_path.name}; fallback single-pass decode")
-                        # Fallback: direct full decode with existing model via recognizer backend
+                        # Fallback: direct full decode with existing model
                         seg_audio = pcm16_full
                         seg_float = seg_audio.astype(np.float32) / 32767.0
                         combined = np.concatenate((getattr(recognizer, '_number_sound', np.zeros(0, dtype=np.int16)), seg_audio))
-                        wav_path = BaseSpeechRecognizer._write_wav_bytes(combined, recognizer.SAMPLE_RATE)  # type: ignore
+                        wav_path = recognizer._write_wav_bytes(combined, recognizer.SAMPLE_RATE)
                         decode_start = time.time()
                         try:
-                            segments = recognizer._backend_transcribe(segment=combined, wav_path=wav_path)  # type: ignore
+                            segments, _ = recognizer._model.transcribe(
+                                wav_path,
+                                beam_size=recognizer.BEAM_SIZE,
+                                language="en",
+                                condition_on_previous_text=recognizer.CONDITION_ON_PREVIOUS_TEXT,
+                                initial_prompt=recognizer.FISH_PROMPT,
+                                vad_filter=recognizer.VAD_FILTER,
+                                vad_parameters=recognizer.VAD_PARAMETERS,
+                                without_timestamps=recognizer.WITHOUT_TIMESTAMPS,
+                            )
+                            segments = list(segments)  # Convert generator to list
                         except Exception as e:
                             logger.error(f"Transcribe failed: {e}")
                             segments = []
@@ -698,9 +725,10 @@ class ASREvaluator:
                         raw_text = " ".join((s.text for s in segments)).strip()
                         avg_conf = None
                         try:
-                            confs = [getattr(s,'confidence',None) for s in segments if getattr(s,'confidence',None) is not None]
+                            confs = [getattr(s,'avg_logprob',None) for s in segments if getattr(s,'avg_logprob',None) is not None]
                             if confs:
-                                avg_conf = float(np.mean(confs))
+                                import math as _m
+                                avg_conf = float(np.mean([max(0.0, min(1.0, _m.exp(c))) for c in confs]))
                         except Exception:
                             pass
                         # Production-like parsing (as in BaseSpeechRecognizer)
@@ -785,7 +813,7 @@ class ASREvaluator:
                             "model_extra_json": json.dumps(cfg.extra, ensure_ascii=False, sort_keys=True),
                         })
                         _progress_log(sample.speaker_id, sample.audio_path.name, expected_number, predicted_number, nem, avg_conf)
-                        _detailed_sample_log(sample.audio_path.name, raw_text, parser_species, parser_length_cm, expected_number, predicted_number)
+                        #_detailed_sample_log(sample.audio_path.name, raw_text, parser_species, parser_length_cm, expected_number, predicted_number)
                         continue
 
                     # After segment_list creation
@@ -858,10 +886,20 @@ class ASREvaluator:
 
                     for idx,(seg_arr, seg_start, seg_end) in enumerate(segment_list):
                         combined = np.concatenate((getattr(recognizer, '_number_sound', np.zeros(0, dtype=np.int16)), seg_arr))
-                        wav_path = BaseSpeechRecognizer._write_wav_bytes(combined, recognizer.SAMPLE_RATE)  # type: ignore
+                        wav_path = recognizer._write_wav_bytes(combined, recognizer.SAMPLE_RATE)
                         decode_start = time.time()
                         try:
-                            segments = recognizer._backend_transcribe(segment=combined, wav_path=wav_path)  # type: ignore
+                            segments, _ = recognizer._model.transcribe(
+                                wav_path,
+                                beam_size=recognizer.BEAM_SIZE,
+                                language="en",
+                                condition_on_previous_text=recognizer.CONDITION_ON_PREVIOUS_TEXT,
+                                initial_prompt=recognizer.FISH_PROMPT,
+                                vad_filter=recognizer.VAD_FILTER,
+                                vad_parameters=recognizer.VAD_PARAMETERS,
+                                without_timestamps=recognizer.WITHOUT_TIMESTAMPS,
+                            )
+                            segments = list(segments)  # Convert generator to list
                         except Exception as e:
                             logger.error(f"Segment transcribe failed: {e}")
                             segments = []
@@ -874,9 +912,10 @@ class ASREvaluator:
                         raw_text = " ".join((s.text for s in segments)).strip()
                         seg_conf = None
                         try:
-                            confs = [getattr(s,'confidence',None) for s in segments if getattr(s,'confidence',None) is not None]
+                            confs = [getattr(s,'avg_logprob',None) for s in segments if getattr(s,'avg_logprob',None) is not None]
                             if confs:
-                                seg_conf = float(np.mean(confs))
+                                import math as _m
+                                seg_conf = float(np.mean([max(0.0, min(1.0, _m.exp(c))) for c in confs]))
                                 seg_conf_values.append(seg_conf)
                         except Exception:
                             pass
@@ -959,7 +998,7 @@ class ASREvaluator:
                             "WER": None,
                             "CER": None,
                             "DER": None,
-                            "absolute_error": None if (expected_number is None or predicted_number_seg is None) else abs(predicted_number_seg-expected_number),
+                            "absolute_error": None,
                             "error_type": None,
                             "notes": "segment_row",
                             "sample_source": sample.source,
@@ -1053,12 +1092,13 @@ class ASREvaluator:
                         "fish_prompt": getattr(recognizer, 'FISH_PROMPT', None),
                         "model_extra_json": json.dumps(cfg.extra, ensure_ascii=False, sort_keys=True),
                     })
-                    _progress_log(sample.speaker_id, sample.audio_path.name, expected_number, predicted_number, nem, rows[-1].get('confidence'))
-                    _detailed_sample_log(sample.audio_path.name, aggregate_text, None, measurement_pred, expected_number, predicted_number)
+                    _progress_log(sample.speaker_id, sample.audio_path.name, expected_number, predicted_number, nem, rows[-1].get('confidence'), sample_idx, total_samples)
+                    #_detailed_sample_log(sample.audio_path.name, aggregate_text, None, measurement_pred, expected_number, predicted_number)
                 continue  # move to next config or sample set
 
             # === Original (non-production replay) path ===
-            for sample in tqdm(samples, desc=f"{cfg.model.name}-{cfg.model.size}", bar_format="{desc} {n_fmt}/{total_fmt}", ncols=28):
+            total_samples = len(samples)
+            for sample_idx, sample in enumerate(tqdm(samples, desc=f"{cfg.model.name}-{cfg.model.size}", bar_format="{desc} {n_fmt}/{total_fmt}", ncols=28), start=1):
                 try:
                     audio, sr = _load_audio(sample.audio_path)
                 except Exception as e:
@@ -1200,8 +1240,8 @@ class ASREvaluator:
                     "model_extra_json": json.dumps(cfg.extra, ensure_ascii=False, sort_keys=True),
                 }
                 rows.append(row)
-                _progress_log(sample.speaker_id, sample.audio_path.name, expected_number, predicted_number, nem, row["confidence"])
-                _detailed_sample_log(sample.audio_path.name, recognized_raw, parser_species, parser_length_cm, expected_number, predicted_number)
+                _progress_log(sample.speaker_id, sample.audio_path.name, expected_number, predicted_number, nem, row["confidence"], sample_idx, total_samples)
+                #_detailed_sample_log(sample.audio_path.name, recognized_raw, parser_species, parser_length_cm, expected_number, predicted_number)
         df = pd.DataFrame(rows)
         if not df.empty:
             self._write_outputs(df)
@@ -1281,6 +1321,15 @@ class ASREvaluator:
 
         logger.info(f"Wrote: {results_path}, {failures_path}, {summary_path}")
 
+        # Generate visualizations and enhanced summary
+        try:
+            from .visualization import EvaluationVisualizer
+            visualizer = EvaluationVisualizer(self.output_dir)
+            analysis = visualizer.generate_all(df, df_agg)
+            logger.info("Generated enhanced visualizations and summary")
+        except Exception as e:
+            logger.debug(f"Visualization generation skipped: {e}")
+
         # Write run summary metadata (json + markdown)
         try:
             import platform, sys, datetime
@@ -1320,9 +1369,83 @@ class ASREvaluator:
                 f"Parser Exact Match Mean: {summary_meta['parser_exact_match_mean']:.4f}" if summary_meta['parser_exact_match_mean'] is not None else "Parser Exact Match Mean: n/a",
                 f"RTF p50/p95/p99: {rtf_percentiles.p50:.3f} / {rtf_percentiles.p95:.3f} / {rtf_percentiles.p99:.3f}",
             ]
+
+            # Add comprehensive breakdown section
+            md_lines.extend(["", "---", "", "## 📊 Quick Summary - Key Totals", ""])
+
+            # Overall stats
+            total_samples = len(df_agg)
+            total_passed = int(df_agg["numeric_exact_match"].sum())
+            total_failed = total_samples - total_passed
+            overall_accuracy = float(df_agg["numeric_exact_match"].mean()) if len(df_agg) > 0 else 0.0
+
+            md_lines.extend([
+                f"**Overall: {total_passed}/{total_samples} passed ({overall_accuracy*100:.1f}%)**",
+                ""
+            ])
+
+            # By Speaker
+            if "speaker_id" in df_agg.columns:
+                md_lines.extend(["### By Speaker", ""])
+                speaker_stats = []
+                for speaker, grp in df_agg.groupby("speaker_id"):
+                    total = len(grp)
+                    passed = int(grp["numeric_exact_match"].sum())
+                    accuracy = passed / total if total > 0 else 0.0
+                    accent = grp["accent"].iloc[0] if "accent" in grp.columns and len(grp) > 0 else "unknown"
+                    speaker_stats.append((speaker, accent, passed, total, accuracy))
+
+                speaker_stats.sort(key=lambda x: x[4], reverse=True)  # Sort by accuracy
+                for speaker, accent, passed, total, accuracy in speaker_stats:
+                    status_emoji = "✅" if accuracy >= 0.95 else "⚠️" if accuracy >= 0.80 else "❌"
+                    md_lines.append(
+                        f"- {status_emoji} **{speaker}** ({accent}): {passed}/{total} passed ({accuracy*100:.1f}%)"
+                    )
+                md_lines.append("")
+
+            # By Accent
+            if "accent" in df_agg.columns:
+                md_lines.extend(["### By Accent", ""])
+                accent_stats = []
+                for accent, grp in df_agg.groupby("accent"):
+                    total = len(grp)
+                    passed = int(grp["numeric_exact_match"].sum())
+                    accuracy = passed / total if total > 0 else 0.0
+                    accent_stats.append((accent, passed, total, accuracy))
+
+                accent_stats.sort(key=lambda x: x[3], reverse=True)  # Sort by accuracy
+                for accent, passed, total, accuracy in accent_stats:
+                    status_emoji = "✅" if accuracy >= 0.95 else "⚠️" if accuracy >= 0.80 else "❌"
+                    md_lines.append(
+                        f"- {status_emoji} **{accent}**: {passed}/{total} passed ({accuracy*100:.1f}%)"
+                    )
+                md_lines.append("")
+
+            # By Model
+            md_lines.extend(["### By Model", ""])
+            model_stats = []
+            for (model, size), grp in df_agg.groupby(["model_name", "model_size"]):
+                total = len(grp)
+                passed = int(grp["numeric_exact_match"].sum())
+                accuracy = passed / total if total > 0 else 0.0
+                avg_rtf = float(grp["RTF"].mean()) if "RTF" in grp else 0.0
+                avg_confidence = float(grp["confidence"].mean()) if "confidence" in grp else 0.0
+                model_stats.append((f"{model}/{size}", passed, total, accuracy, avg_rtf, avg_confidence))
+
+            model_stats.sort(key=lambda x: x[3], reverse=True)  # Sort by accuracy
+            for model, passed, total, accuracy, avg_rtf, avg_confidence in model_stats:
+                status_emoji = "✅" if accuracy >= 0.95 else "⚠️" if accuracy >= 0.80 else "❌"
+                md_lines.append(
+                    f"- {status_emoji} **{model}**: {passed}/{total} passed ({accuracy*100:.1f}%) | "
+                    f"RTF: {avg_rtf:.3f} | Conf: {avg_confidence:.3f}"
+                )
+            md_lines.append("")
+
+            md_lines.extend(["---", ""])
+
             # Embed model specs if present
             if "model_specs_full" in summary_meta or "model_specs_full_raw" in summary_meta:
-                md_lines.extend(["", "## Model Specs", ""])
+                md_lines.extend(["## Model Specs", ""])
                 try:
                     if "model_specs_full" in summary_meta:
                         ms_pretty = json.dumps(summary_meta["model_specs_full"], indent=2, ensure_ascii=False, sort_keys=True)
@@ -1343,23 +1466,12 @@ class ASREvaluator:
 
 # Progress logging helper (added to avoid NameError)
 # (kept for single-line summary if needed)
-def _progress_log(speaker: str, wav: str, expected, predicted, nem, confidence):
+def _progress_log(speaker: str, wav: str, expected, predicted, nem, confidence, current: int = 0, total: int = 0):
     try:
-        status = "PASSED" if nem == 1 else "FAIL"
-        logger.info(f"{speaker} -> {wav} - exp={expected} pred={predicted} {status} conf={confidence if confidence is not None else 'n/a'}")
-    except Exception:
-        pass
-
-def _detailed_sample_log(wav_id: str, raw_text: str, parser_species, parser_length_cm, expected_number, predicted_number):
-    """Pretty multi-line log similar to integration test output."""
-    try:
-        logger.info("────────────────────────────────────────")
-        logger.info(f"🎤 Audio: {wav_id}")
-        logger.info(f"📜 Raw transcript: '{raw_text}'")
-        if parser_species is not None or parser_length_cm is not None:
-            logger.info(f"📦 Parser result: species={parser_species} length_cm={parser_length_cm}")
+        status = "PASSED" if nem == 1 else "FAILED"
+        if total > 0:
+            logger.info(f"{status}: {speaker} - {wav} (exp: {expected}, pred: {predicted}, nem: {nem:.4f}, conf: {confidence}) [{current}/{total}]")
         else:
-            logger.info("📦 Parser result: <none>")
-        logger.info(f"✅ Expected length: {expected_number}, 🧮 Got: {parser_length_cm if parser_length_cm is not None else predicted_number}")
+            logger.info(f"{status}: {speaker} - {wav} (exp: {expected}, pred: {predicted}, nem: {nem:.4f}, conf: {confidence})")
     except Exception:
         pass

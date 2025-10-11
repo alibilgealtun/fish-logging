@@ -279,6 +279,9 @@ python -m evaluation.run_evaluation --max-samples 5
 
 # Generate plots
 python -m evaluation.run_evaluation --plots
+
+# Disable number prefix (default is enabled)
+python -m evaluation.run_evaluation --concat-number
 ```
 
 ---

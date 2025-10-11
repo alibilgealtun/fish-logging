@@ -4,7 +4,7 @@ from __future__ import annotations
 Now supports:
 - --dataset-json for explicit JSON list of items
 - --audio-root for audio directory referenced by JSON
-- --concat-number to prepend number.wav automatically
+- --concat-number to disable prepending number.wav automatically (default True)
 - --number-audio custom path to number.wav
 - --grid config file (JSON/YAML) defining parameter lists so you don't type 50 args
 
@@ -46,7 +46,8 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     p.add_argument("--dataset", help="Directory dataset root (fallback discovery)")
     p.add_argument("--dataset-json", dest="dataset_json", help="Explicit JSON list file (audio, expected)")
     p.add_argument("--audio-root", dest="audio_root", help="Base directory for audio files referenced by dataset JSON")
-    p.add_argument("--concat-number", action="store_true", help="Prepend number.wav prefix during decoding")
+    # Inverted semantics: default True, passing --concat-number DISABLES concatenation
+    p.add_argument("--concat-number", dest="concat_number", action="store_false", default=True, help="Disable prepending number.wav prefix during decoding")
     p.add_argument("--number-audio", dest="number_audio", help="Explicit path to number.wav for concatenation")
     p.add_argument("--grid", help="Grid config file (JSON/YAML) specifying parameter lists")
 
@@ -66,7 +67,11 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     p.add_argument("--preset", help="Named preset (quick, full) located in evaluation/presets")
     p.add_argument("--production-replay", action="store_true", help="Replay audio through production NoiseController segmentation (closer to main.py)")
     p.add_argument("--model-specs", dest="model_specs_path", help="JSON/YAML file with per-model specs list (alternative to flat lists)")
-    return p.parse_args(argv)
+    ns = p.parse_args(argv)
+    # Track whether user explicitly provided the concat flag (to disable)
+    raw_argv = argv if argv is not None else sys.argv[1:]
+    setattr(ns, "concat_number_cli_provided", "--concat-number" in (raw_argv or []))
+    return ns
 
 
 def _load_preset(name: str) -> Dict[str, Any]:
@@ -129,8 +134,9 @@ def _defaults_if_missing(ns: argparse.Namespace) -> None:
                 ar = Path("tests/audio")
                 if ar.exists():
                     ns.audio_root = str(ar)
-            if ns.audio_root:
-                ns.concat_number = True  # enable automatically for numbers dataset
+            # Enable automatically for numbers dataset unless user disabled via CLI
+            if ns.audio_root and not getattr(ns, "concat_number_cli_provided", False):
+                ns.concat_number = True
     # If still nothing, fallback dataset dir
     if not ns.dataset and not ns.dataset_json:
         ns.dataset = "."
@@ -156,8 +162,9 @@ def _apply_grid(ns: argparse.Namespace) -> argparse.Namespace:
     ns.languages = _maybe("languages", "languages") or ["en"]
     ns.dataset_json = ns.dataset_json or cfg.get("dataset_json")
     ns.audio_root = ns.audio_root or cfg.get("audio_root")
-    if cfg.get("concat_number") and not ns.concat_number:
-        ns.concat_number = True
+    # Respect CLI override; otherwise, honor grid value if provided
+    if "concat_number" in cfg and not getattr(ns, "concat_number_cli_provided", False):
+        ns.concat_number = bool(cfg.get("concat_number"))
     if cfg.get("number_audio") and not ns.number_audio:
         ns.number_audio = cfg.get("number_audio")
     return ns
@@ -255,8 +262,8 @@ def main(argv: List[str] | None = None):
             ns.dataset_json = central.get('dataset_json')
         if not getattr(ns, 'audio_root', None) and central.get('audio_root'):
             ns.audio_root = central.get('audio_root')
-        # Flags (apply only if user did not explicitly override)
-        if not ns.concat_number and central.get('concat_number'):
+        # Flags (apply only if user did not explicitly override via CLI)
+        if not getattr(ns, "concat_number_cli_provided", False) and "concat_number" in central:
             ns.concat_number = bool(central.get('concat_number'))
         if not ns.production_replay and central.get('production_replay'):
             ns.production_replay = bool(central.get('production_replay'))
@@ -276,7 +283,8 @@ def main(argv: List[str] | None = None):
                     ar = Path('tests/audio')
                     if ar.exists():
                         ns.audio_root = str(ar)
-                if ns.audio_root and not ns.concat_number:
+                # Only enable if user did not explicitly disable via CLI
+                if ns.audio_root and not getattr(ns, "concat_number_cli_provided", False):
                     ns.concat_number = True
 
     logger.info("Resolved configuration:")
