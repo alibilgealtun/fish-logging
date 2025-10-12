@@ -24,6 +24,26 @@ class ExcelLogger:
                 # New header includes Station ID
                 ws.append(["Date", "Time",  "Boat", "Station ID", "Species", "Length (cm)", "Confidence"])
                 wb.save(self.file_path)
+            else:
+                # Migrate older files that don't have Station ID column
+                try:
+                    from openpyxl import load_workbook  # type: ignore
+                    wb = load_workbook(self.file_path)
+                    ws = wb.active
+                    header = self._read_header(ws)
+                    if header and "Station ID" not in header:
+                        # Insert a column after "Boat"
+                        try:
+                            boat_idx0 = header.index("Boat")  # 0-based
+                            insert_at = boat_idx0 + 2  # openpyxl is 1-based; +1 for position after boat, +1 to convert to 1-based
+                        except ValueError:
+                            insert_at = 4  # fallback to column D
+                        ws.insert_cols(insert_at, amount=1)
+                        ws.cell(row=1, column=insert_at).value = "Station ID"
+                        wb.save(self.file_path)
+                except Exception:
+                    # Best-effort; ignore migration failure to avoid blocking logging
+                    pass
 
     def _read_header(self, ws) -> List[str]:
         return [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]

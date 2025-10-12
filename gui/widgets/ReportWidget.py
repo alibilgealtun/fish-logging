@@ -25,6 +25,9 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QScrollArea,
     QSizePolicy,
+    QToolButton,
+    QTextBrowser,
+    QStyle,
 )
 from PyQt6.QtGui import QResizeEvent, QCloseEvent
 from PyQt6.QtCore import QSettings
@@ -39,6 +42,8 @@ except Exception:  # pragma: no cover
     logger = logging.getLogger("report_widget")
 
 import sys
+import os
+import subprocess
 
 
 # Defaults
@@ -191,6 +196,13 @@ class ReportWidget(QWidget):
         # Config group
         config_group = QGroupBox("Report Configuration")
         cfg = QGridLayout(config_group)
+        try:
+            cfg.setColumnStretch(0, 0)
+            cfg.setColumnStretch(1, 1)
+            cfg.setColumnStretch(2, 0)
+            cfg.setColumnStretch(3, 0)
+        except Exception:
+            pass
 
         # Data source selector
         data_src_label = QLabel("Data Source:")
@@ -204,10 +216,23 @@ class ReportWidget(QWidget):
         self.data_label.setWordWrap(True)
         self._update_data_label()
         cfg.addWidget(self.data_label, 0, 1)
+        # Folder button to open data file in system
+        self.btn_open_data_loc = QToolButton()
+        try:
+            self.btn_open_data_loc.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
+        except Exception:
+            pass
+        try:
+            self.btn_open_data_loc.setAutoRaise(True)
+        except Exception:
+            pass
+        self.btn_open_data_loc.setToolTip("Open data file location")
+        self.btn_open_data_loc.clicked.connect(self._open_data_location)
+        cfg.addWidget(self.btn_open_data_loc, 0, 2)
         btn_browse_data = QPushButton("Browse…")
         btn_browse_data.setStyleSheet("QPushButton{background:#60a5fa;color:white;border:none;padding:6px 10px;border-radius:6px;}QPushButton:hover{background:#3b82f6;}")
         btn_browse_data.clicked.connect(self._browse_data)
-        cfg.addWidget(btn_browse_data, 0, 2)
+        cfg.addWidget(btn_browse_data, 0, 3)
 
         # Output directory selector
         out_dir_label = QLabel("Output Directory:")
@@ -221,10 +246,23 @@ class ReportWidget(QWidget):
         self.out_label.setWordWrap(True)
         self._update_output_label()
         cfg.addWidget(self.out_label, 1, 1)
+        # Folder button to open output directory
+        self.btn_open_out_loc = QToolButton()
+        try:
+            self.btn_open_out_loc.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
+        except Exception:
+            pass
+        try:
+            self.btn_open_out_loc.setAutoRaise(True)
+        except Exception:
+            pass
+        self.btn_open_out_loc.setToolTip("Open output directory")
+        self.btn_open_out_loc.clicked.connect(self._open_out_dir_location)
+        cfg.addWidget(self.btn_open_out_loc, 1, 2)
         btn_browse_out = QPushButton("Browse…")
         btn_browse_out.setStyleSheet("QPushButton{background:#34d399;color:#0b1f16;border:none;padding:6px 10px;border-radius:6px;}QPushButton:hover{background:#10b981;color:#052e1c;}")
         btn_browse_out.clicked.connect(self._browse_out)
-        cfg.addWidget(btn_browse_out, 1, 2)
+        cfg.addWidget(btn_browse_out, 1, 3)
 
         # Output format checkboxes
         # Removed format options; always export PDF
@@ -315,10 +353,16 @@ class ReportWidget(QWidget):
         # Results
         results_group = QGroupBox("Results")
         rg = QVBoxLayout(results_group)
-        self.results = QTextEdit()
-        self.results.setReadOnly(True)
+        # Replace QTextEdit with QTextBrowser to support clickable links
+        self.results = QTextBrowser()
+        self.results.setOpenExternalLinks(False)
+        try:
+            self.results.setOpenLinks(False)
+        except Exception:
+            pass
+        self.results.anchorClicked.connect(self._on_result_link_clicked)
         self.results.setVisible(False)
-        self.results.setMaximumHeight(150)
+        self.results.setMaximumHeight(180)
         rg.addWidget(self.results)
         left_layout.addWidget(results_group)
 
@@ -466,10 +510,10 @@ class ReportWidget(QWidget):
                                 self.worker.terminate()
                             except Exception:
                                 pass
-                            try:
-                                self.worker.wait(1000)
-                            except Exception:
-                                pass
+                        try:
+                            self.worker.wait(1000)
+                        except Exception:
+                            pass
                 finally:
                     try:
                         self.worker.deleteLater()
@@ -491,10 +535,10 @@ class ReportWidget(QWidget):
                                 self._render_worker.terminate()
                             except Exception:
                                 pass
-                            try:
-                                self._render_worker.wait(800)
-                            except Exception:
-                                pass
+                        try:
+                            self._render_worker.wait(800)
+                        except Exception:
+                            pass
                 finally:
                     try:
                         self._render_worker.deleteLater()
@@ -701,12 +745,28 @@ class ReportWidget(QWidget):
         self.status.setText("Done")
         logger.info(f"[Report] Done. Exported files: {report.get('exported_files')}")
         QMessageBox.information(self, "Report Ready", "Report has been generated successfully.")  # type: ignore[arg-type]
-        # Show a compact summary of outputs
+        # Show a compact summary of outputs with clickable folder icons
         files = report.get("exported_files", {})
         if files:
-            text = "\n".join(f"• {k.upper()}: {v}" for k, v in files.items())
-            self.results.setText(text)
-            self.results.setVisible(True)
+            try:
+                rows = []
+                for k, v in files.items():
+                    p = Path(str(v)).resolve()
+                    disp = self._get_display_path(p)
+                    # clickable icon and clickable path
+                    href = p.as_uri()
+                    # Use fragment to indicate reveal for files
+                    frag = "#reveal" if p.is_file() else ""
+                    rows.append(f"• {k.upper()}: <a href=\"{href}{frag}\">📂</a> <a href=\"{href}{frag}\"><code>{disp}</code></a>")
+                html = "<div style='font-size:12px;'>" + "<br/>".join(rows) + "</div>"
+                self.results.setHtml(html)
+                self.results.setVisible(True)
+            except Exception as e:
+                logger.exception(f"[Report] Failed to render results HTML: {e}")
+                text = "\n".join(f"• {k.upper()}: {v}" for k, v in files.items())
+                # Fallback
+                self.results.setPlainText(text)
+                self.results.setVisible(True)
         # Reset reference to worker
         try:
             if self.worker is not None:
@@ -977,3 +1037,72 @@ class ReportWidget(QWidget):
                 self._render_plotly_chart(key)
         except Exception as e:
             logger.error(f"[Report] Failed to render default chart: {e}")
+
+    def _open_data_location(self) -> None:
+        try:
+            if self._data_path is None:
+                QMessageBox.information(self, "No data selected", "Please select a data file first.")  # type: ignore[arg-type]
+                return
+            self._open_path_in_system(self._data_path, reveal_file=True)
+        except Exception as e:
+            logger.exception(f"[Report] Failed to open data location: {e}")
+
+    def _open_out_dir_location(self) -> None:
+        try:
+            target = self._out_dir or DEFAULT_OUTPUT_DIR.resolve()
+            self._open_path_in_system(target, reveal_file=False)
+        except Exception as e:
+            logger.exception(f"[Report] Failed to open output directory: {e}")
+
+    def _open_path_in_system(self, path: Path, reveal_file: bool = False) -> None:
+        """Open a file or directory in the system file manager.
+        On macOS tries to reveal files in Finder. On Windows reveals via explorer.
+        On Linux uses xdg-open.
+        """
+        try:
+            p = path.resolve()
+            if not p.exists():
+                QMessageBox.warning(self, "Path not found", f"Path not found:\n{p}")  # type: ignore[arg-type]
+                return
+            if sys.platform == "darwin":
+                if reveal_file and p.is_file():
+                    subprocess.run(["open", "-R", str(p)], check=False)
+                else:
+                    target = p if p.is_dir() else p.parent
+                    subprocess.run(["open", str(target)], check=False)
+                return
+            if sys.platform.startswith("win"):
+                try:
+                    import ctypes  # lazy
+                    if reveal_file and p.is_file():
+                        subprocess.run(["explorer", "/select,", str(p)], check=False)
+                    else:
+                        os.startfile(str(p if p.is_dir() else p.parent))  # type: ignore[attr-defined]
+                except Exception:
+                    subprocess.run(["explorer", str(p if p.is_dir() else p.parent)], check=False)
+                return
+            # Linux and others
+            target = p if p.is_dir() else p.parent
+            # Prefer xdg-open; fallback to QDesktopServices
+            try:
+                subprocess.run(["xdg-open", str(target)], check=False)
+            except Exception:
+                from PyQt6.QtCore import QUrl
+                from PyQt6.QtGui import QDesktopServices
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+        except Exception as e:
+            logger.exception(f"[Report] Failed to open path: {e}")
+
+    def _on_result_link_clicked(self, url):
+        """Handle clicks on results hyperlinks to open or reveal files/dirs."""
+        try:
+            from PyQt6.QtCore import QUrl
+            if isinstance(url, QUrl):
+                p = Path(url.toLocalFile())
+            else:
+                p = Path(str(url))
+            reveal = (isinstance(url, QUrl) and url.fragment() == "reveal") or (isinstance(url, str) and url.endswith("#reveal"))
+            self._open_path_in_system(p, reveal_file=reveal)
+        except Exception as e:
+            logger.exception(f"[Report] Failed handling result link: {e}")
+
