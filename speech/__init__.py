@@ -19,4 +19,13 @@ def __getattr__(name: str):
     if name == "GoogleSpeechRecognizer":
         from .google_speech_recognizer import GoogleSpeechRecognizer
         return GoogleSpeechRecognizer
+    if name == "AssemblyAIRecognizer":
+        from .assemblyai_recognizer import AssemblyAIRecognizer
+        return AssemblyAIRecognizer
+    if name == "GeminiRecognizer":
+        from .gemini_recognizer import GeminiRecognizer
+        return GeminiRecognizer
+    if name == "ChirpRecognizer":
+        from .chirp_recognizer import ChirpRecognizer
+        return ChirpRecognizer
     raise AttributeError(f"module 'speech' has no attribute {name!r}")

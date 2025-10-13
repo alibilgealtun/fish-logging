@@ -10,7 +10,7 @@ def create_recognizer(engine: str, numbers_only: bool = False, noise_profile: Op
     """Factory for a speech recognizer instance.
 
     Parameters:
-        engine: One of {whisper, whisperx, vosk, google}.
+        engine: One of {whisper, whisperx, vosk, google, assemblyai, gemini, chirp}.
         numbers_only: Passed to recognizers that support it (e.g., Google).
         noise_profile: Optional noise profile name (clean|human|engine|mixed) applied to NoiseController.
 
@@ -40,11 +40,41 @@ def create_recognizer(engine: str, numbers_only: bool = False, noise_profile: Op
             ) from exc
         return GoogleSpeechRecognizer(numbers_only=numbers_only, noise_profile=noise_profile)  # type: ignore[call-arg]
 
+    def _make_assemblyai():
+        try:
+            from speech import AssemblyAIRecognizer  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(
+                "AssemblyAIRecognizer not available. Install websocket-client and retry."
+            ) from exc
+        return AssemblyAIRecognizer(noise_profile=noise_profile)
+
+    def _make_gemini():
+        try:
+            from speech import GeminiRecognizer  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(
+                "GeminiRecognizer not available. Install google-generativeai and retry."
+            ) from exc
+        return GeminiRecognizer(noise_profile=noise_profile)
+
+    def _make_chirp():
+        try:
+            from speech import ChirpRecognizer  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(
+                "ChirpRecognizer not available. Install google-cloud-speech v2 and retry."
+            ) from exc
+        return ChirpRecognizer(noise_profile=noise_profile)
+
     registry: dict[str, Callable[[], BaseSpeechRecognizer]] = {
         "whisper": _make_whisper,
         "whisperx": _make_whisperx,
         "vosk": _make_vosk,
         "google": _make_google,
+        "assemblyai": _make_assemblyai,
+        "gemini": _make_gemini,
+        "chirp": _make_chirp,
     }
 
     try:

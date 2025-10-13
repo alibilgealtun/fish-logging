@@ -358,54 +358,47 @@ class VoskRecognizer(BaseSpeechRecognizer):
                     text_lower = text_out.lower()
                     if any(cmd in text_lower for cmd in ["wait", "pause"]):
                         self.pause()
-                        self.final_text.emit("Paused - say 'start' to continue", 0.95)
+                        self.final_text.emit("Waiting until 'start' is said.", 0.85)
                         continue
                     elif "start" in text_lower:
                         self.resume()
-                        self.final_text.emit("Resumed", 0.95)
                         continue
 
                     if self._paused:
                         continue
 
-                    # Parse fish data
+                    # Parse fish data (mirror faster-whisper behavior)
                     try:
                         from parser import FishParser, TextNormalizer
-                        
+
                         parser = FishParser()
                         normalizer = TextNormalizer()
-                        
+
                         # Apply corrections and parse
                         corrected = normalizer.apply_fish_asr_corrections(text_out)
+                        if corrected != text_out.lower():
+                            logger.info(f"After ASR corrections: {corrected}")
                         parsed: ParserResult = parser.parse_text(corrected)
-                        
-                        # Handle results
-                        if parsed.species:
+
+                        # Update species
+                        if parsed.species is not None:
                             self._last_fish_specie = parsed.species
                             self.specie_detected.emit(parsed.species)
-                            logger.info(f"Species: {parsed.species}")
 
                         if parsed.length_cm is not None:
                             length = float(parsed.length_cm)
                             length_str = f"{length:.1f}".rstrip('0').rstrip('.')
-                            
-                            if self._last_fish_specie:
-                                output = f"{self._last_fish_specie} {length_str} cm"
-                            else:
-                                output = f"{length_str} cm"
-                            
-                            logger.info(f"MEASUREMENT: {output}")
-                            self.final_text.emit(output, 0.95)
-                        elif parsed.species:
-                            # Just species detected
-                            self.final_text.emit(f"Species: {parsed.species}", 0.90)
+                            formatted = f"{self._last_fish_specie} {length_str} cm"
+                            logger.info(f">> {formatted}")
+                            self.final_text.emit(formatted, 0.85)
                         else:
-                            # Partial or unclear
-                            self.final_text.emit(corrected, 0.80)
+                            logger.info(f">> {corrected} (partial parse)")
+                            self.final_text.emit(corrected, 0.85)
 
                     except Exception as e:
                         logger.error(f"Parsing error: {e}")
-                        self.final_text.emit(text_out, 0.75)
+                        logger.info(f">> {text_out}")
+                        self.final_text.emit(text_out, 0.85)
 
                     self._emit_status_once("listening")
 

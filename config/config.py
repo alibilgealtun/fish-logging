@@ -20,7 +20,7 @@ class SpeechConfig:
     noise_profile: str = "mixed"  # clean | human | engine | mixed
 
     def __post_init__(self):
-        if self.engine not in ("whisper", "whisperx", "vosk", "google"):
+        if self.engine not in ("whisper", "whisperx", "vosk", "google", "assemblyai", "gemini", "chirp"):
             raise ValueError(f"Invalid engine: {self.engine}")
         if self.noise_profile not in {"clean", "human", "engine", "mixed"}:
             raise ValueError(f"Invalid noise_profile: {self.noise_profile}")
@@ -192,7 +192,7 @@ class ConfigLoader:
 
         parser.add_argument(
             "--engine", "--model",
-            choices=["whisper", "whisperx", "vosk", "google"],
+            choices=["whisper", "whisperx", "vosk", "google", "assemblyai", "gemini", "chirp"],
             help="Speech recognition engine"
         )
         parser.add_argument(
