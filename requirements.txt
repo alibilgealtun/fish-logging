@@ -4,6 +4,7 @@ PyQt6-WebEngine>=6.5.0
 loguru>=0.7.0
 numpy>=1.24.0
 pandas>=2.0.0
+python-dotenv>=1.0.0
 
 # Speech recognition
 sounddevice>=0.4.6
@@ -17,6 +18,10 @@ google-cloud-speech>=2.26,<3
 faster-whisper>=1.0.0
 whisperx>=3.1.0
 insanely-fast-whisper>=0.0.15
+
+# Wav2Vec2 backend (optional)
+transformers>=4.44.0
+torch>=2.2.0
 
 # New ASR engines
 websocket-client>=1.7.0  # For AssemblyAI streaming

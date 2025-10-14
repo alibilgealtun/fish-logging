@@ -292,21 +292,6 @@ class GeminiRecognizer(BaseSpeechRecognizer):
             logger.debug("Paused: ignoring transcription")
             return
 
-        # Apply ASR corrections and parsing like faster-whisper
-        try:
-            from parser import FishParser, TextNormalizer, ParserResult
-            fish_parser = FishParser()
-            text_normalizer = TextNormalizer()
-
-            corrected_text = text_normalizer.apply_fish_asr_corrections(text)
-            if corrected_text != text.lower():
-                logger.info(f"After ASR corrections: {corrected_text}")
-
-            result: ParserResult = fish_parser.parse_text(corrected_text)
-
-            if result.species is not None:
-                self._last_fish_specie = result.species
-                self.specie_detected.emit(result.species)
 
             if result.length_cm is not None:
                 raw_val = float(result.length_cm)

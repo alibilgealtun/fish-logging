@@ -10,7 +10,7 @@ def create_recognizer(engine: str, numbers_only: bool = False, noise_profile: Op
     """Factory for a speech recognizer instance.
 
     Parameters:
-        engine: One of {whisper, whisperx, vosk, google, assemblyai, gemini, chirp}.
+        engine: One of {whisper, whisperx, vosk, google, assemblyai, gemini, chirp, wav2vec2}.
         numbers_only: Passed to recognizers that support it (e.g., Google).
         noise_profile: Optional noise profile name (clean|human|engine|mixed) applied to NoiseController.
 
@@ -67,6 +67,15 @@ def create_recognizer(engine: str, numbers_only: bool = False, noise_profile: Op
             ) from exc
         return ChirpRecognizer(noise_profile=noise_profile)
 
+    def _make_wav2vec2():
+        try:
+            from speech import Wav2Vec2Recognizer  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(
+                "Wav2Vec2Recognizer not available. Install transformers and torch and retry."
+            ) from exc
+        return Wav2Vec2Recognizer(noise_profile=noise_profile)
+
     registry: dict[str, Callable[[], BaseSpeechRecognizer]] = {
         "whisper": _make_whisper,
         "whisperx": _make_whisperx,
@@ -75,6 +84,7 @@ def create_recognizer(engine: str, numbers_only: bool = False, noise_profile: Op
         "assemblyai": _make_assemblyai,
         "gemini": _make_gemini,
         "chirp": _make_chirp,
+        "wav2vec2": _make_wav2vec2,
     }
 
     try:

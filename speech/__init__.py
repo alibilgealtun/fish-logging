@@ -28,4 +28,7 @@ def __getattr__(name: str):
     if name == "ChirpRecognizer":
         from .chirp_recognizer import ChirpRecognizer
         return ChirpRecognizer
+    if name == "Wav2Vec2Recognizer":
+        from .wav2vec2_recognizer import Wav2Vec2Recognizer
+        return Wav2Vec2Recognizer
     raise AttributeError(f"module 'speech' has no attribute {name!r}")

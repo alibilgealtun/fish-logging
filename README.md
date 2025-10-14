@@ -4,7 +4,7 @@ A desktop application (PyQt6) for real‑time speech → structured fish log ent
 
 ---
 ## 1. Features
-- Multiple ASR engines: faster‑whisper (default), whisperx, vosk, (optional) Google Cloud
+- Multiple ASR engines: faster‑whisper (default), whisperx, vosk, (optional) Google Cloud, wav2vec2, AssemblyAI, Gemini, Chirp
 - Real‑time segmentation (NoiseController + WebRTC VAD)
 - Robust normalization (numbers, units, species spelling variants)
 - FishParser: extract species + length (cm) from free speech
@@ -52,6 +52,30 @@ Additional recognizers live under `speech/`. For Google Cloud:
 export GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/key.json
 ```
 (Ensure the Speech‑to‑Text API is enabled and service account has permission.)
+
+### AssemblyAI (streaming)
+The app can stream audio to AssemblyAI for low-latency transcription. Configure via environment variable or a `.env` file in the project root.
+
+1) Create a `.env` file next to `main.py` with:
+```
+ASSEMBLYAI_API_KEY=your_api_key_here
+```
+2) Run with the engine flag:
+```bash
+python main.py --engine assemblyai
+```
+Notes:
+- The app automatically loads `.env` on startup.
+- You can also export in your shell instead of using `.env`:
+```bash
+export ASSEMBLYAI_API_KEY=your_api_key_here
+```
+
+### wav2vec2 (CPU)
+Pure‑PyTorch CTC model via Hugging Face transformers, suitable for offline CPU use.
+- Default model: `facebook/wav2vec2-base-960h` (English, 16 kHz)
+- Select in app settings or via factory key: `wav2vec2`
+- Requirements: `transformers` and `torch` (already in `requirements.txt`)
 
 ---
 ## 6. Processing Pipeline (Live)
@@ -148,6 +172,7 @@ Key points:
 | Species missing | Not in species.json | Add alias / base name |
 | Wrong number | Prefix missing / segmentation | Provide number.wav or adjust VAD_MODE |
 | No segments | VAD too strict | Lower VAD aggressiveness or MIN_SPEECH_S |
+| AssemblyAI fallback to Whisper | Missing `ASSEMBLYAI_API_KEY` | Put it in `.env` (root) or export in shell; ensure variable name is exact |
 
 ---
 For deep dive into metrics & automated benchmarks: open `evaluation/README_TEST_EVAL.md`.

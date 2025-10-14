@@ -96,6 +96,34 @@ def _load_whisperx(model_size: str, device: str, compute_type: str, **_) -> Any:
         return whisperx.load_model(model_size, device=device)
 
 
+@register_backend("wav2vec2")
+def _load_wav2vec2(model_size: str, device: str, compute_type: str, **_) -> Any:
+    """Load a Wav2Vec2 CTC model via transformers.
+
+    Returns a simple object with attributes: model, processor, device.
+    """
+    from dataclasses import dataclass as _dataclass
+    try:
+        import torch  # type: ignore
+        from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor  # type: ignore
+    except Exception as e:  # pragma: no cover - env dependent
+        raise RuntimeError("Install torch and transformers to use wav2vec2 backend") from e
+
+    @_dataclass
+    class _W2V2Bundle:
+        model: Any
+        processor: Any
+        device: str
+        torch: Any
+
+    proc = Wav2Vec2Processor.from_pretrained(model_size)
+    mdl = Wav2Vec2ForCTC.from_pretrained(model_size)
+    dev = device or "cpu"
+    mdl.to(dev)
+    mdl.eval()
+    return _W2V2Bundle(model=mdl, processor=proc, device=dev, torch=torch)
+
+
 @register_backend("dummy")
 def _load_dummy(model_size: str, device: str, compute_type: str, **_) -> Any:
     class _Dummy:
@@ -453,6 +481,22 @@ class ASREvaluator:
             if isinstance(result, list):
                 return " ".join(getattr(s, "text", str(s)) for s in result).strip()
             return str(result).strip()
+        elif name == "wav2vec2":
+            # Expect model to be _W2V2Bundle loaded above
+            bundle = model
+            torch = bundle.torch
+            # audio expected float32 in [-1,1]; ensure dtype
+            audio_f32 = audio.astype(np.float32)
+            inputs = bundle.processor(audio_f32, sampling_rate=sample_rate, return_tensors="pt")
+            input_values = inputs.input_values.to(bundle.device)
+            attention_mask = None
+            if hasattr(inputs, "attention_mask") and inputs.attention_mask is not None:
+                attention_mask = inputs.attention_mask.to(bundle.device)
+            with torch.no_grad():
+                logits = bundle.model(input_values, attention_mask=attention_mask).logits
+                pred_ids = torch.argmax(logits, dim=-1)
+            text = bundle.processor.batch_decode(pred_ids)[0].strip()
+            return " ".join(text.split())
         else:
             raise ValueError(f"Decoding not implemented for backend {name}")
 
@@ -462,6 +506,7 @@ class ASREvaluator:
         - faster-whisper: use mean(exp(avg_logprob)) across segments if present
         - whisperx: use mean(exp(avg_logprob)) across segments if present; else None
         - dummy: fixed token with confidence 1.0
+        - wav2vec2: mean of max softmax over time steps
         """
         name = cfg.model.name.lower()
         if name == "dummy":
@@ -530,6 +575,24 @@ class ASREvaluator:
             text = " ".join(texts).strip()
             avg_conf = float(sum(confs) / len(confs)) if confs else None
             return text, avg_conf
+        if name == "wav2vec2":
+            bundle = model
+            torch = bundle.torch
+            audio_f32 = audio.astype(np.float32)
+            inputs = bundle.processor(audio_f32, sampling_rate=sample_rate, return_tensors="pt")
+            input_values = inputs.input_values.to(bundle.device)
+            attention_mask = None
+            if hasattr(inputs, "attention_mask") and inputs.attention_mask is not None:
+                attention_mask = inputs.attention_mask.to(bundle.device)
+            with torch.no_grad():
+                logits = bundle.model(input_values, attention_mask=attention_mask).logits
+                probs = torch.softmax(logits, dim=-1)
+                pred_ids = torch.argmax(probs, dim=-1)
+                max_probs = probs.max(dim=-1).values
+                conf = float(max_probs.mean().cpu().item()) if max_probs.numel() > 0 else 0.0
+            text = bundle.processor.batch_decode(pred_ids)[0].strip()
+            text = " ".join(text.split())
+            return text, conf
         # Fallback to plain decode
         return self._decode(model, cfg, audio, sample_rate), None
 

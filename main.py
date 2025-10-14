@@ -1,6 +1,15 @@
 """Main entry point for the fish logging application."""
 from __future__ import annotations
 
+# Load environment variables from .env early so config and recognizers can see them
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()  # Searches for a .env file in the current and parent directories
+except Exception:
+    # If python-dotenv isn't installed, proceed; env vars can still be provided by the shell
+    pass
+
 from app.startup import run_application
 from speech.factory import create_recognizer
 
