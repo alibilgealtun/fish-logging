@@ -317,7 +317,7 @@ class AssemblyAIRecognizer(BaseSpeechRecognizer):
                     if transcript:
                         if is_partial:
                             logger.debug(f"Emitting partial: {transcript}")
-                            self.partial_text.emit(transcript)
+                            #self.partial_text.emit(transcript)
                         else:
                             # Prefer end_of_turn_confidence, else general confidence, else default to 0.85 like faster-whisper
                             confidence = float(

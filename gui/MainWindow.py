@@ -427,13 +427,14 @@ class MainWindow(QMainWindow):
         logger.info(f"[GUI partial] {text}")
 
     def _on_final_text(self, text: str, confidence: float) -> None:
-        self.live_text.setPlainText(text)
-        self.live_text.verticalScrollBar().setValue(self.live_text.verticalScrollBar().maximum())
-        logger.info(f"[GUI final] conf={confidence:.2f} text={text}")
+
 
         result = self.fish_parser.parse_text(text)
         if result.cancel:
             ok = self.excel_logger.cancel_last()
+            self.live_text.setPlainText(text)
+            self.live_text.verticalScrollBar().setValue(self.live_text.verticalScrollBar().maximum())
+            logger.info(f"[GUI final] conf={confidence:.2f} text={text}")
             if ok:
                 self._remove_last_table_row()
                 self.statusBar().showMessage("✅ Last entry cancelled successfully", 3000)
@@ -450,6 +451,9 @@ class MainWindow(QMainWindow):
                 # Update selector visually
                 try:
                     self.species_selector.setCurrentByName(result.species)
+                    self.live_text.setPlainText(text)
+                    self.live_text.verticalScrollBar().setValue(self.live_text.verticalScrollBar().maximum())
+                    logger.info(f"[GUI final] conf={confidence:.2f} text={text}")
                 except Exception:
                     pass
                 # Retrieve boat & station from Settings widget (single source of truth)
