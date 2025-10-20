@@ -72,7 +72,7 @@ class WhisperTestHarness:  # match baseline name, only model differs
 
         if self.use_concat:
             try:
-                self._number_sound, _ = sf.read("tests/audio/number.wav", dtype='int16')
+                self._number_sound, _ = sf.read("assets/audio/number.wav", dtype='int16')
             except Exception:
                 self._number_sound = (np.zeros(int(self.recognizer.SAMPLE_RATE * 0.05))).astype(np.int16)
 

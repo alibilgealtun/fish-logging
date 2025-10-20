@@ -125,9 +125,7 @@ class InsanelyFastWhisperRecognizer(BaseSpeechRecognizer):
     def _load_number_prefix(self) -> np.ndarray:
         """Load and prepare the number prefix audio as PCM16 mono at SAMPLE_RATE."""
         candidates = [
-            os.path.join(os.getcwd(), "number_prefix.wav"),
-            os.path.join(os.getcwd(), "number.wav"),
-            os.path.join(os.getcwd(), "tests", "audio", "number.wav"),
+            os.path.join(os.getcwd(), "assets/audio/number.wav"),
         ]
         for p in candidates:
             try:

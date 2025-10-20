@@ -243,8 +243,7 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
         Returns PCM16 mono numpy array.
         """
         candidates = [
-            os.path.join(os.getcwd(), "number_prefix.wav"),
-            os.path.join(os.getcwd(), "tests", "audio", "number.wav"),
+            os.path.join(os.getcwd(), "assets/audio/number.wav"),
         ]
         for path in candidates:
             try:
