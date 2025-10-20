@@ -53,31 +53,59 @@ class FishParser:
         if not text:
             return ParserResult(cancel=False, species=None, length_cm=None)
 
-        # Normalize whitespace
         text_norm = text.strip()
 
         # Check for cancel command
-        if self._cancel_pattern.search(text_norm):
+        if self._is_cancel_command(text_norm):
             return ParserResult(cancel=True, species=None, length_cm=None)
 
-        # Extract measurements
-        length_val, unit = self.number_parser.extract_number_with_units(text_norm)
+        # Extract species and length
+        species = self._extract_species(text_norm)
+        length_cm = self._extract_length(text_norm)
 
-        # If a number was found but no unit was specified, assume the default unit 'cm'.
-        if length_val is not None and unit is None:
-            unit = "cm"
+        return ParserResult(cancel=False, species=species, length_cm=length_cm)
 
-        # Finalize the length in cm if the unit is correct
-        if length_val is not None and unit == "cm":
-            length_cm = float(length_val)
+    def _is_cancel_command(self, text: str) -> bool:
+        """Check if text contains a cancel command.
 
-        # Extract species
-        species = self.species_matcher.fuzzy_match_species(text_norm)
+        Args:
+            text: Normalized text to check
+
+        Returns:
+            True if cancel command detected
+        """
+        return bool(self._cancel_pattern.search(text))
+
+    def _extract_species(self, text: str) -> Optional[str]:
+        """Extract and normalize species name from text.
+
+        Args:
+            text: Text to extract species from
+
+        Returns:
+            Normalized species name or None
+        """
+        species = self.species_matcher.fuzzy_match_species(text)
         if species:
-            species = species.title()
+            return species.title()
+        return None
 
-        # Return complete result if both species and measurement found
-        if length_val is not None and unit == "cm" and species is not None:
-            return ParserResult(cancel=False, species=species, length_cm=float(length_val))
+    def _extract_length(self, text: str) -> Optional[float]:
+        """Extract length measurement from text and convert to centimeters.
 
-        return ParserResult(cancel=False, species=species, length_cm=length_val)
+        Args:
+            text: Text to extract length from
+
+        Returns:
+            Length in centimeters or None
+        """
+        length_val, unit = self.number_parser.extract_number_with_units(text)
+
+        if length_val is not None:
+            # If no unit specified, assume cm (default)
+            unit = unit or "cm"
+            # Only return if unit is cm (already converted by parser)
+            if unit == "cm":
+                return float(length_val)
+
+        return None

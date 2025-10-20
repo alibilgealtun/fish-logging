@@ -24,7 +24,7 @@ class SpeciesMatcher:
         """
         Find the best matching fish species in the given text.
 
-        Uses multiple strategies:
+        Uses multiple strategies in order of specificity:
         1. Direct exact word boundary matching
         2. Token window fuzzy matching (1-3 token windows)
         3. Whole-text fuzzy matching as fallback
@@ -36,25 +36,45 @@ class SpeciesMatcher:
             Normalized species name if found, None otherwise
         """
         lowered = text.lower()
+
+        # Try strategies in order of specificity
+        strategies = [
+            self._exact_word_boundary_match,
+            self._token_window_fuzzy_match,
+            self._whole_text_fuzzy_match,
+        ]
+
+        for strategy in strategies:
+            result = strategy(lowered)
+            if result:
+                return result
+
+        return None
+
+    def _exact_word_boundary_match(self, text: str) -> Optional[str]:
+        """Strategy 1: Direct exact word boundary matching."""
         species_list = self.config.species
 
-        # Strategy 1: Direct exact word boundary matching
         for candidate in species_list:
             normalized_candidate = self.normalize_species_name(candidate)
             pattern = r"\b" + re.escape(normalized_candidate) + r"\b"
-            if re.search(pattern, lowered):
+            if re.search(pattern, text):
                 return self.config.species_normalization.get(
                     normalized_candidate, normalized_candidate
                 )
 
-        # Strategy 2: Token window fuzzy matching
-        tokens = tokenize_text(lowered)
+        return None
+
+    def _token_window_fuzzy_match(self, text: str) -> Optional[str]:
+        """Strategy 2: Token window fuzzy matching (checks 1-3 token windows)."""
+        species_list = self.config.species
+        tokens = tokenize_text(text)
         n = len(tokens)
 
         # Check windows of different sizes (3, 2, 1 tokens)
         for window_size in (3, 2, 1):
             for i in range(0, n - window_size + 1):
-                window = " ".join(tokens[i:i + window_size])
+                window = " ".join(tokens[i : i + window_size])
                 best_match = process.extractOne(
                     window, species_list, scorer=fuzz.token_set_ratio
                 )
@@ -62,12 +82,18 @@ class SpeciesMatcher:
                     normalized = self.normalize_species_name(best_match[0])
                     return self.config.species_normalization.get(normalized, normalized)
 
-        # Strategy 3: Whole-text fuzzy matching fallback
+        return None
+
+    def _whole_text_fuzzy_match(self, text: str) -> Optional[str]:
+        """Strategy 3: Whole-text fuzzy matching fallback (higher threshold)."""
+        species_list = self.config.species
+
         best_whole_match = process.extractOne(
-            lowered, species_list, scorer=fuzz.token_set_ratio
+            text, species_list, scorer=fuzz.token_set_ratio
         )
         if best_whole_match and best_whole_match[1] >= 85:
             normalized = self.normalize_species_name(best_whole_match[0])
             return self.config.species_normalization.get(normalized, normalized)
 
         return None
+

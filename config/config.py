@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import argparse
 
+from core.exceptions import ConfigurationError
+
 
 @dataclass(frozen=True)
 class SpeechConfig:
@@ -21,9 +23,9 @@ class SpeechConfig:
 
     def __post_init__(self):
         if self.engine not in ("whisper", "whisperx", "vosk", "google", "assemblyai", "gemini", "chirp", "wav2vec2"):
-            raise ValueError(f"Invalid engine: {self.engine}")
+            raise ConfigurationError(f"Invalid engine: {self.engine}")
         if self.noise_profile not in {"clean", "human", "engine", "mixed"}:
-            raise ValueError(f"Invalid noise_profile: {self.noise_profile}")
+            raise ConfigurationError(f"Invalid noise_profile: {self.noise_profile}")
 
 
 @dataclass(frozen=True)

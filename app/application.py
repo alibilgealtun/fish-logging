@@ -2,9 +2,6 @@
 from __future__ import annotations
 
 import sys
-import threading
-import signal
-import atexit
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -12,50 +9,69 @@ from PyQt6.QtWidgets import QApplication
 
 from logger.excel_logger import ExcelLogger
 from logger.session_logger import SessionLogger
+from app.services import (
+    ExceptionHandlerService,
+    SignalHandlerService,
+    CleanupService,
+    RecognizerCleanupService,
+)
 
 if TYPE_CHECKING:
     from speech import BaseSpeechRecognizer
 
 
 class Application:
-    """Main application class that handles initialization and lifecycle."""
+    """Main application class that handles initialization and lifecycle.
 
-    def __init__(self, recognizer: BaseSpeechRecognizer):
+    Refactored to use service classes following Single Responsibility Principle.
+    """
+
+    def __init__(
+        self,
+        recognizer: BaseSpeechRecognizer,
+        excel_logger: ExcelLogger = None,
+        session_logger: SessionLogger = None,
+    ):
+        """Initialize application with dependencies.
+
+        Args:
+            recognizer: Speech recognizer instance
+            excel_logger: Excel logger instance (created if not provided)
+            session_logger: Session logger instance (uses singleton if not provided)
+        """
         self.recognizer = recognizer
-        self.session = SessionLogger.get()
-        self.excel_logger = ExcelLogger()
-        self._setup_exception_handling()
-        # Ensure cleanup runs even if GUI not closed cleanly
-        atexit.register(self.cleanup)
+        self.session = session_logger or SessionLogger.get()
+        self.excel_logger = excel_logger or ExcelLogger()
 
-    def _setup_exception_handling(self) -> None:
-        """Configure global exception handling for main and worker threads."""
-        def excepthook(exc_type, exc_value, exc_traceback):
-            try:
-                import traceback
-                tb = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
-                logger.error("Uncaught exception:\n{}", tb)
-                self.session.log(tb)
-            finally:
-                try:
-                    sys.__excepthook__(exc_type, exc_value, exc_traceback)
-                except Exception:
-                    pass
+        # Initialize services
+        self.cleanup_service = CleanupService()
+        self.exception_handler = ExceptionHandlerService(self.session)
+        self.signal_handler = SignalHandlerService(
+            cleanup_callback=self.cleanup, quit_callback=None  # Set when Qt app is created
+        )
+        self.recognizer_cleanup = RecognizerCleanupService(self.recognizer)
 
-        def thread_excepthook(args: threading.ExceptHookArgs) -> None:
-            excepthook(args.exc_type, args.exc_value, args.exc_traceback)
+        # Setup infrastructure
+        self.exception_handler.install()
+        self.cleanup_service.install_atexit()
 
-        sys.excepthook = excepthook
-        threading.excepthook = thread_excepthook
+        # Register cleanup handlers
+        self.cleanup_service.register(self.recognizer_cleanup.cleanup, "recognizer")
+        self.cleanup_service.register(
+            lambda: SessionLogger.get().log_end(), "session_logger"
+        )
 
     def log_session_info(self, config: dict) -> None:
         """Log session configuration and recognizer info."""
         try:
-            self.session.log_kv("APP", {
-                "engine": config.get("engine"),
-                "numbers_only": config.get("numbers_only"),
-                "python": sys.version.split(" ")[0],
-            })
+            self.session.log_kv(
+                "APP",
+                {
+                    "engine": config.get("engine"),
+                    "numbers_only": config.get("numbers_only"),
+                    "python": sys.version.split(" ")[0],
+                },
+            )
 
             if hasattr(self.recognizer, "get_config"):
                 self.session.log_kv("CONFIG", self.recognizer.get_config())
@@ -65,85 +81,22 @@ class Application:
     def create_qt_app(self, qt_args: list[str]) -> QApplication:
         """Create and configure the Qt application."""
         app = QApplication(qt_args)
-        # Replace previous simple aboutToQuit hook with full cleanup
+
+        # Update signal handler with quit callback
+        self.signal_handler.quit_callback = app.quit
+        self.signal_handler.install()
+
+        # Connect cleanup to Qt shutdown
         app.aboutToQuit.connect(self.cleanup)
-        # Install signal handlers for SIGINT/SIGTERM to allow Ctrl+C graceful shutdown
-        self._install_signal_handlers(app)
+
         return app
 
-    def _install_signal_handlers(self, app: QApplication) -> None:
-        """Install POSIX signal handlers to ensure graceful shutdown on Ctrl+C / kill.
-
-        Also handles SIGHUP (common when closing the terminal on macOS/Linux)
-        and SIGQUIT so the app can clean up QThreads before process teardown.
-        """
-        def _handle(signum, frame):  # type: ignore[override]
-            try:
-                logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-            except Exception:
-                pass
-            try:
-                self.cleanup()
-            finally:
-                try:
-                    app.quit()
-                except Exception:
-                    pass
-        for sig_name in ("SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"):
-            sig = getattr(signal, sig_name, None)
-            if sig is not None:
-                try:
-                    signal.signal(sig, _handle)
-                except Exception:
-                    # Some environments (like embedded interpreters) may not allow this
-                    pass
-
     def cleanup(self) -> None:
-        """Best-effort graceful shutdown of long-running resources / threads."""
-        try:
-            # Stop recognizer thread if still alive
-            if self.recognizer is not None:
-                try:
-                    # Politely request interruption/stop
-                    if hasattr(self.recognizer, "requestInterruption"):
-                        try:
-                            self.recognizer.requestInterruption()  # type: ignore[attr-defined]
-                        except Exception:
-                            pass
-                    self.recognizer.stop()
-                except Exception as e:
-                    logger.debug(f"Recognizer stop() raised: {e}")
-                # Wait for thread termination with a bounded timeout
-                try:
-                    if getattr(self.recognizer, 'isRunning', lambda: False)():
-                        finished = self.recognizer.wait(8000)
-                        if not finished and getattr(self.recognizer, 'isRunning', lambda: False)():
-                            # Last-resort: force termination to avoid qFatal on destruction
-                            logger.warning("Recognizer thread did not exit in time; forcing terminate()")
-                            try:
-                                self.recognizer.terminate()  # type: ignore[attr-defined]
-                            except Exception:
-                                pass
-                            try:
-                                self.recognizer.wait(4000)
-                            except Exception:
-                                pass
-                except Exception as e:
-                    logger.debug(f"Recognizer wait() raised: {e}")
-        except Exception:
-            pass
-        # Log session end (idempotent)
-        try:
-            SessionLogger.get().log_end()
-        except Exception:
-            pass
-        # Drop reference so Python GC order doesn't try to delete a still-running thread
-        try:
-            self.recognizer = None  # type: ignore[assignment]
-        except Exception:
-            pass
+        """Execute cleanup through the cleanup service."""
+        self.cleanup_service.cleanup()
 
     def create_main_window(self):
         """Create the main application window."""
         from gui.MainWindow import MainWindow  # local import to avoid PyQt in tests
+
         return MainWindow(self.recognizer, self.excel_logger)

@@ -149,57 +149,94 @@ class NumberParser:
 
 
     def extract_number_with_units(self, text: str) -> Tuple[Optional[float], Optional[str]]:
-        """Extract numeric measurement and convert to standard units."""
+        """Extract numeric measurement and convert to standard units.
+
+        Uses multiple parsing strategies in order of specificity.
+        """
         if not text:
             return None, None
 
         text_lower = text.strip().lower()
 
-        def finalize(number: float, unit_str: str) -> Tuple[float, str]:
-            normalized_unit = self._normalize_unit(unit_str)
-            value_in_cm = number / 10.0 if normalized_unit == "mm" else number
-            return round(value_in_cm, 4), "cm"
+        # Try strategies in order of specificity
+        strategies = [
+            self._parse_numeric_with_unit,
+            self._parse_ordinal_number,
+            self._parse_spoken_number_with_unit,
+            self._parse_fallback_numeric
+        ]
 
-        # Strategy 1: Numeric with unit regex (e.g., "35.5cm")
-        match = self._numeric_with_unit_pattern.search(text_lower)
+        for strategy in strategies:
+            result = strategy(text_lower)
+            if result[0] is not None:
+                return result
+
+        return None, None
+
+    def _finalize_measurement(self, number: float, unit_str: str) -> Tuple[float, str]:
+        """Convert measurement to standard unit (cm) and normalize.
+
+        Args:
+            number: The numeric value
+            unit_str: The unit string (e.g., 'mm', 'cm', 'centimeter')
+
+        Returns:
+            Tuple of (value_in_cm, 'cm')
+        """
+        normalized_unit = self._normalize_unit(unit_str)
+        value_in_cm = number / 10.0 if normalized_unit == "mm" else number
+        return round(value_in_cm, 4), "cm"
+
+    def _parse_numeric_with_unit(self, text: str) -> Tuple[Optional[float], Optional[str]]:
+        """Strategy 1: Parse numeric value with explicit unit (e.g., '35.5cm', '42 mm')."""
+        match = self._numeric_with_unit_pattern.search(text)
         if match:
-            return finalize(float(match.group(1).replace(",", ".")), match.group(2))
+            number = float(match.group(1).replace(",", "."))
+            unit = match.group(2)
+            return self._finalize_measurement(number, unit)
+        return None, None
 
-        # Strategy 2: Ordinal number strategy (e.g., "35th")
-        ordinal_match = self._ordinal_pattern.search(text_lower)
+    def _parse_ordinal_number(self, text: str) -> Tuple[Optional[float], Optional[str]]:
+        """Strategy 2: Parse ordinal numbers (e.g., '35th', '42nd')."""
+        ordinal_match = self._ordinal_pattern.search(text)
         if ordinal_match:
             number = float(ordinal_match.group(1))
-            unit_match = re.search(r"\b(cm|centimeters?|mm|millimeters?)\b", text_lower, re.IGNORECASE)
+            # Look for explicit unit, default to cm
+            unit_match = re.search(r"\b(cm|centimeters?|mm|millimeters?)\b", text, re.IGNORECASE)
             unit = unit_match.group(1) if unit_match else "cm"
-            return finalize(number, unit)
+            return self._finalize_measurement(number, unit)
+        return None, None
 
-        # Strategy 3: Spoken Number Strategy
-        tokens = tokenize_text(text_lower)
-        unit_indices = [i for i, token in enumerate(tokens) if self._fuzzy_find_unit_index([token]) is not None]
+    def _parse_spoken_number_with_unit(self, text: str) -> Tuple[Optional[float], Optional[str]]:
+        """Strategy 3: Parse spoken numbers with units (e.g., 'thirty five centimeters')."""
+        tokens = tokenize_text(text)
+        unit_indices = [i for i, token in enumerate(tokens)
+                       if self._fuzzy_find_unit_index([token]) is not None]
 
         if unit_indices:
             last_unit_index = unit_indices[-1]
             unit_token = tokens[last_unit_index]
+            # Search backwards from unit for spoken number
             start_index = max(0, last_unit_index - 10)
             search_tokens = tokens[start_index:last_unit_index]
             parsed_number = self._find_longest_spoken_number(search_tokens)
             if parsed_number is not None:
-                return finalize(parsed_number, unit_token)
+                return self._finalize_measurement(parsed_number, unit_token)
 
-        # Check for spoken number without explicit unit
+        # Check for spoken number without explicit unit (but unit mentioned elsewhere)
         parsed_number = self._find_longest_spoken_number(tokens)
         if parsed_number is not None:
-            unit_match = re.search(r"\b(cm|centimeters?|mm|millimeters?)\b", text_lower, re.IGNORECASE)
+            unit_match = re.search(r"\b(cm|centimeters?|mm|millimeters?)\b", text, re.IGNORECASE)
             unit = unit_match.group(1) if unit_match else "cm"
-            return finalize(parsed_number, unit)
+            return self._finalize_measurement(parsed_number, unit)
 
-        # Strategy 4 (Fallback): Simple numeric regex for standalone numbers (e.g., "5")
-        # This handles cases where only a number is spoken without any unit.
-        numeric_match = self._numeric_pattern.search(text_lower)
+        return None, None
+
+    def _parse_fallback_numeric(self, text: str) -> Tuple[Optional[float], Optional[str]]:
+        """Strategy 4: Fallback to simple numeric extraction (e.g., '42' alone)."""
+        numeric_match = self._numeric_pattern.search(text)
         if numeric_match:
             number = float(numeric_match.group(1).replace(",", "."))
-            # Assume the default unit 'cm' as it's the most common case
-            return finalize(number, "cm")
-
-        # If all strategies fail, return None
+            # Assume default unit 'cm' as it's the most common case
+            return self._finalize_measurement(number, "cm")
         return None, None

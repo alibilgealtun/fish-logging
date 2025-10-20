@@ -147,16 +147,10 @@ class AssemblyAIRecognizer(BaseSpeechRecognizer):
                 suppressor_config=suppressor_cfg,
             )
 
-        # Initialize session logger
+        # Initialize session logger using singleton pattern (refactored)
         from logger.session_logger import SessionLogger
-        self._session_logger = SessionLogger()
+        self._session_logger = SessionLogger.get()
         self._session_logger.log_start(self.get_config())
-        import loguru
-        self._session_log_sink_id = loguru.logger.add(
-            self._session_logger.log_path,
-            format="[{time:YYYY-MM-DD HH:mm:ss}] {level}: {message}",
-            level="INFO"
-        )
 
         if not self.isRunning():
             try:

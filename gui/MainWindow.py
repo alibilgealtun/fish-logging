@@ -21,35 +21,73 @@ except Exception:  # pragma: no cover
 
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger("main_window")
+
 from parser import FishParser
 from .widgets import *
 from .widgets.ReportWidget import ReportWidget
 from .widgets.SettingsWidget import SettingsWidget
+from .table_manager import TableManager
+from .speech_event_handler import SpeechEventHandler
+from .status_presenter import StatusPresenter
+from .settings_provider import SettingsProvider
+from .recognizer_controller import RecognizerController
+from app.use_cases import (
+    ProcessFinalTextUseCase,
+    LogFishEntryUseCase,
+    CancelLastEntryUseCase,
+)
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, speech_recognizer, excel_logger) -> None:
+    def __init__(self, speech_recognizer, excel_logger, fish_parser: FishParser = None) -> None:
         super().__init__()
         self.speech_recognizer = speech_recognizer
         self.excel_logger = excel_logger
         self.setWindowTitle("🎣 Voice2FishLog ")
         self.resize(1100, 700)
-        self.fish_parser = FishParser()
+
+        # Initialize domain components (with dependency injection)
+        self.fish_parser = fish_parser if fish_parser is not None else FishParser()
+
+        # Initialize use cases
+        self.process_text_use_case = ProcessFinalTextUseCase(self.fish_parser)
+        self.log_entry_use_case = LogFishEntryUseCase(self.excel_logger)
+        self.cancel_entry_use_case = CancelLastEntryUseCase(self.excel_logger)
+
+        # Initialize speech event handler
+        self.speech_handler = SpeechEventHandler(
+            self.process_text_use_case,
+            self.log_entry_use_case,
+            self.cancel_entry_use_case,
+        )
+
+        # Setup callbacks for speech handler (will be set after UI is created)
+        self._setup_speech_handler_callbacks()
 
         self._setup_background()
         self._setup_modern_theme()
         self._setup_ui()
+
+        # Initialize helper classes after UI is created
+        self.table_manager = TableManager(self.table, self)
+        self.status_presenter = StatusPresenter(self.status_panel, self.status_label, self.statusBar())
+        self.settings_provider = SettingsProvider(self.settings_widget)
+        self.recognizer_controller = RecognizerController(self.speech_recognizer)
+
         self._connect_signals()
 
-        # Start listening immediately (clean restart-friendly)
-        if not self.speech_recognizer.isRunning():
-            try:
-                if hasattr(self.speech_recognizer, "begin"):
-                    self.speech_recognizer.begin()
-                else:
-                    self.speech_recognizer.start()
-            except Exception as e:
-                logger.error(f"Failed to start recognizer: {e}")
+        # Start listening immediately using the controller
+        self.recognizer_controller.ensure_started()
+
+    def _setup_speech_handler_callbacks(self) -> None:
+        """Setup callbacks for the speech event handler."""
+        # These will update the UI based on events
+        self.speech_handler.on_partial_update = self._update_live_text
+        self.speech_handler.on_entry_logged = self._on_entry_logged_success
+        self.speech_handler.on_entry_cancelled = self._on_entry_cancelled_success
+        self.speech_handler.on_cancel_failed = self._on_cancel_failed
+        self.speech_handler.on_error = self._show_error_message
+        self.speech_handler.on_species_detected = self._on_species_detected_internal
 
     def _setup_modern_theme(self) -> None:
         """Apply modern dark/light theme to the entire application"""
@@ -246,7 +284,27 @@ class MainWindow(QMainWindow):
         """Create and return the main logging tab UI as a QWidget."""
         main_tab = QWidget()
 
-        # Live transcription section with glassmorphism
+        # Create UI panels using extracted methods
+        transcription_panel = self._create_transcription_panel()
+        table_panel = self._create_table_panel()
+
+        # Main splitter for the logging tab
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(transcription_panel)
+        splitter.addWidget(table_panel)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([150, 550])
+
+        main_tab_layout = QVBoxLayout()
+        main_tab_layout.setContentsMargins(20, 20, 20, 20)
+        main_tab_layout.addWidget(splitter)
+        main_tab.setLayout(main_tab_layout)
+
+        return main_tab
+
+    def _create_transcription_panel(self) -> QWidget:
+        """Create the live transcription panel."""
         transcription_panel = GlassPanel()
         transcription_layout = QVBoxLayout(transcription_panel)
         transcription_layout.setSpacing(12)
@@ -267,12 +325,31 @@ class MainWindow(QMainWindow):
         self.live_text.setStyleSheet(self.live_text.styleSheet() + "\nModernTextEdit { font-size: 16px;  }\n")
         transcription_layout.addWidget(self.live_text)
 
-        # Table section with glassmorphism
+        return transcription_panel
+
+    def _create_table_panel(self) -> QWidget:
+        """Create the logged entries table panel."""
         table_panel = GlassPanel()
         table_layout = QVBoxLayout(table_panel)
         table_layout.setSpacing(16)
         table_layout.setContentsMargins(24, 20, 24, 20)
 
+        # Add header with species selector
+        header_row = self._create_table_header()
+        table_layout.addLayout(header_row)
+
+        # Create and configure table
+        self._create_and_configure_table()
+        table_layout.addWidget(self.table)
+
+        # Add control panel
+        control_panel = self._create_control_panel()
+        table_layout.addWidget(control_panel)
+
+        return table_panel
+
+    def _create_table_header(self) -> QHBoxLayout:
+        """Create the table header with species selector."""
         header_row = QHBoxLayout()
         table_header = ModernLabel("📊 Logged Entries", "header")
 
@@ -289,8 +366,10 @@ class MainWindow(QMainWindow):
         header_row.addWidget(self.species_selector)
         header_row.addStretch()
 
-        table_layout.addLayout(header_row)
+        return header_row
 
+    def _create_and_configure_table(self) -> None:
+        """Create and configure the main logging table."""
         # Update table to show only visible columns (Date, Time, Species, Length, Trash)
         self.table = ModernTable(0, 5)
         self.table.setHorizontalHeaderLabels(["📅 Date", "⏰ Time", "🐟 Species", "📏 Length (cm)", "🗑"])
@@ -300,6 +379,7 @@ class MainWindow(QMainWindow):
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setAlternatingRowColors(True)
+
         header = self.table.horizontalHeader()
         try:
             # Make Date and Time columns a bit narrower
@@ -312,9 +392,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(str(e))
         header.resizeSection(4, 44)
-        table_layout.addWidget(self.table)
 
-        # Control panel with glassmorphism
+    def _create_control_panel(self) -> QWidget:
+        """Create the control panel with start/stop buttons and status indicator."""
         control_panel = GlassPanel()
         control_layout = QHBoxLayout(control_panel)
         control_layout.setContentsMargins(24, 16, 24, 16)
@@ -328,6 +408,14 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.btn_stop)
 
         # Status indicator
+        status_container = self._create_status_indicator()
+        control_layout.addWidget(status_container)
+        control_layout.addStretch(1)
+
+        return control_panel
+
+    def _create_status_indicator(self) -> QWidget:
+        """Create the status indicator widget."""
         status_container = QWidget()
         status_layout = QHBoxLayout(status_container)
         status_layout.setContentsMargins(0, 0, 0, 0)
@@ -346,24 +434,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_panel)
         status_layout.addWidget(self.status_label)
 
-        control_layout.addWidget(status_container)
-        control_layout.addStretch(1)
-        table_layout.addWidget(control_panel)
-
-        # Main splitter for the logging tab
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.addWidget(transcription_panel)
-        splitter.addWidget(table_panel)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([150, 550])
-
-        main_tab_layout = QVBoxLayout()
-        main_tab_layout.setContentsMargins(20, 20, 20, 20)
-        main_tab_layout.addWidget(splitter)
-        main_tab.setLayout(main_tab_layout)
-
-        return main_tab
+        return status_container
 
     def _connect_signals(self) -> None:
         # Avoid duplicate connections by disconnecting if already connected
@@ -421,57 +492,16 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Current species: {name}")
 
     def _on_partial_text(self, text: str) -> None:
-        # Show last partial text in live panel and log to console
-        self.live_text.setPlainText(text)
-        self.live_text.verticalScrollBar().setValue(self.live_text.verticalScrollBar().maximum())
-        logger.info(f"[GUI partial] {text}")
+        # Delegate to speech handler
+        self.speech_handler.handle_partial_text(text)
 
     def _on_final_text(self, text: str, confidence: float) -> None:
+        """Handle final text from speech recognition - delegated to handler."""
+        # Use SettingsProvider to get boat and station data (no Law of Demeter violation)
+        boat_name, station_id = self.settings_provider.get_and_save_all()
 
-
-        result = self.fish_parser.parse_text(text)
-        if result.cancel:
-            ok = self.excel_logger.cancel_last()
-            self.live_text.setPlainText(text)
-            self.live_text.verticalScrollBar().setValue(self.live_text.verticalScrollBar().maximum())
-            logger.info(f"[GUI final] conf={confidence:.2f} text={text}")
-            if ok:
-                self._remove_last_table_row()
-                self.statusBar().showMessage("✅ Last entry cancelled successfully", 3000)
-                logger.info("[parsed] CANCEL -> removed last entry")
-            else:
-                self.statusBar().showMessage("ℹ️ Nothing to cancel", 3000)
-                logger.info("[parsed] CANCEL -> nothing to remove")
-            return
-
-        logger.info(f"[parsed] species={result.species} length_cm={result.length_cm}")
-
-        if result.species and result.length_cm is not None:
-            try:
-                # Update selector visually
-                try:
-                    self.species_selector.setCurrentByName(result.species)
-                    self.live_text.setPlainText(text)
-                    self.live_text.verticalScrollBar().setValue(self.live_text.verticalScrollBar().maximum())
-                    logger.info(f"[GUI final] conf={confidence:.2f} text={text}")
-                except Exception:
-                    pass
-                # Retrieve boat & station from Settings widget (single source of truth)
-                boat_widget = getattr(self.settings_widget, 'boat_input', None)
-                station_widget = getattr(self.settings_widget, 'station_input', None)
-                boat_name = boat_widget.get_boat_name() if boat_widget else ""
-                if boat_widget:
-                    boat_widget.save_boat_name()
-                station_id = station_widget.get_station_id() if station_widget else ""
-                if station_widget:
-                    station_widget.save_station_id()
-                # Log
-                self.excel_logger.log_entry(result.species, result.length_cm, confidence, boat_name, station_id)
-                logger.info(f"[excel] Logged {result.species} {result.length_cm:.1f} cm conf={confidence:.2f} boat={boat_name} station={station_id}")
-                self._prepend_table_row(result.species, result.length_cm, confidence, boat_name, station_id)
-                self.statusBar().showMessage("🎣 Great catch logged successfully!", 2000)
-            except Exception as e:
-                self._alert(f"Failed to log to Excel: {e}")
+        # Delegate to speech handler with context
+        self.speech_handler.handle_final_text(text, confidence, boat_name, station_id)
 
     def _prepend_table_row(self, species: str, length_cm: float, confidence: float, boat: str, station: str) -> None:
         # Show only Date, Time, Species, Length in table (Boat/Station/Confidence hidden, but logged)
@@ -538,74 +568,36 @@ class MainWindow(QMainWindow):
                 self.table.removeRow(row_index)
 
     def _on_error(self, message: str) -> None:
+        """Handle error from speech recognizer."""
         self._alert(message)
-        self.statusBar().showMessage("❌ Error: " + message)
+        self.status_presenter.show_error(message)
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
-        self.status_panel.set_status_color("#f44336", "#d32f2f")
 
     def _on_status(self, message: str) -> None:
-        # Update color and text to communicate state at a glance
-        status_config = {
-            "listening": {
-                "color": "#2196F3",
-                "bg_color": "#1976D2",
-                "label": "🎧 Listening for speech...",
-                "status": "Ready to capture your words"
-            },
-            "capturing": {
-                "color": "#4CAF50",
-                "bg_color": "#388E3C",
-                "label": "🎤 Capturing speech...",
-                "status": "Recording your fishing story"
-            },
-            "finishing": {
-                "color": "#FF9800",
-                "bg_color": "#F57C00",
-                "label": "⚡ Processing...",
-                "status": "Analyzing your catch data"
-            },
-            "stopped": {
-                "color": "#9E9E9E",
-                "bg_color": "#616161",
-                "label": "⏸️ Listening stopped",
-                "status": "Voice recognition paused"
-            },
-        }
-
-        config = status_config.get(message, status_config["listening"])
-        self.status_panel.set_status_color(config["color"], config["bg_color"])
-        self.status_label.setText(config["label"])
-        self.statusBar().showMessage(config["status"])
+        """Handle status change from speech recognizer - delegate to StatusPresenter."""
+        self.status_presenter.show_status(message)
 
     def _on_stop(self) -> None:
-        try:
-            self.speech_recognizer.stop()
-        finally:
-            self.btn_start.setEnabled(True)
-            self.btn_stop.setEnabled(False)
-            self.statusBar().showMessage("⏸️ Voice recognition stopped")
-            self.status_panel.set_status_color("#9E9E9E", "#616161")
+        """Stop speech recognition."""
+        self.recognizer_controller.stop()
+        self.btn_start.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.status_presenter.show_status("stopped")
 
     def _on_start(self) -> None:
-        if not self.speech_recognizer.isRunning():
-            try:
-                if hasattr(self.speech_recognizer, "begin"):
-                    self.speech_recognizer.begin()
-                else:
-                    self.speech_recognizer.start()
-                self.statusBar().showMessage("🎧 Listening for your fishing stories...")
-            except Exception as e:
-                self._alert(f"Failed to start listening: {e}")
-        self.btn_start.setEnabled(False)
-        self.btn_stop.setEnabled(True)
-        self.status_panel.set_status_color("#2196F3", "#1976D2")
+        """Start speech recognition."""
+        success = self.recognizer_controller.start()
+        if success:
+            self.btn_start.setEnabled(False)
+            self.btn_stop.setEnabled(True)
+            self.status_presenter.show_status("listening")
+        else:
+            self._alert("Failed to start listening")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        try:
-            self.speech_recognizer.stop()
-        except Exception:
-            pass
+        """Handle window close event."""
+        self.recognizer_controller.stop()
         return super().closeEvent(event)
 
     def _alert(self, message: str) -> None:
@@ -634,3 +626,51 @@ class MainWindow(QMainWindow):
             }
         """)
         msg_box.exec()
+
+    def _update_live_text(self, text: str) -> None:
+        """Update the live transcription text area."""
+        self.live_text.setPlainText(text)
+        self.live_text.verticalScrollBar().setValue(self.live_text.verticalScrollBar().maximum())
+
+    def _on_entry_logged_success(self, entry) -> None:
+        """Handle successful logging of a fish entry."""
+        # Update species selector if species was detected
+        try:
+            self.species_selector.setCurrentByName(entry.species)
+        except Exception:
+            pass
+
+        # Add to table using table manager
+        self.table_manager.add_entry(
+            entry.species,
+            entry.length_cm,
+            entry.confidence,
+            entry.boat,
+            entry.station_id,
+            delete_callback=self._on_delete_clicked
+        )
+        self.statusBar().showMessage("🎣 Great catch logged successfully!", 2000)
+
+    def _on_entry_cancelled_success(self) -> None:
+        """Handle successful cancellation of the last entry."""
+        self.table_manager.remove_last_row()
+        self.statusBar().showMessage("✅ Last entry cancelled successfully", 3000)
+
+    def _on_cancel_failed(self) -> None:
+        """Handle failure to cancel the last entry."""
+        self.statusBar().showMessage("ℹ️ Nothing to cancel", 3000)
+
+    def _show_error_message(self, message: str) -> None:
+        """Show an error message to the user."""
+        self._alert(message)
+        self.statusBar().showMessage("❌ Error: " + message)
+        self.btn_start.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.status_panel.set_status_color("#f44336", "#d32f2f")
+
+    def _on_species_detected_internal(self, species: str) -> None:
+        """Handle species detection from speech recognizer."""
+        try:
+            self.species_selector.setCurrentByName(species)
+        except Exception:
+            pass

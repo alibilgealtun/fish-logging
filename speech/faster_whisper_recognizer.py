@@ -111,9 +111,8 @@ class WhisperRecognizer(BaseSpeechRecognizer):
                 setattr(self, attr, prof[attr])
         suppressor_cfg = make_suppressor_config(prof, self.SAMPLE_RATE)
 
-        # Initialize noise controller
+        # Initialize noise controller BEFORE trying to access it
         if self._noise_profile_name == "clean":
-            # Use simpler controller (HPF + VAD only) for clean environment
             from noise.simple_controller import SimpleNoiseController
             self._noise_controller = SimpleNoiseController(
                 sample_rate=self.SAMPLE_RATE,
@@ -129,6 +128,60 @@ class WhisperRecognizer(BaseSpeechRecognizer):
                 max_segment_s=self.MAX_SEGMENT_S,
                 suppressor_config=suppressor_cfg,
             )
+
+        # Initialize session logger using singleton pattern (refactored)
+        from logger.session_logger import SessionLogger
+        self._session_logger = SessionLogger.get()
+        self._session_logger.log_start(self.get_config())
+
+        if not self.isRunning():
+            try:
+                self.start()
+            except Exception as e:
+                logger.error(f"Failed to (re)start recognizer: {e}")
+
+    def is_stopped(self) -> bool:
+        """Return True if stop has been requested."""
+        return self._stop_flag
+
+    def pause(self) -> None:
+        """Pause transcription (after hearing 'WAIT')."""
+        self._paused = True
+        self.status_changed.emit("paused")
+
+    def resume(self) -> None:
+        """Resume transcription (after hearing 'START')."""
+        self._paused = False
+        self.status_changed.emit("listening")
+
+    def get_config(self) -> dict:
+        """Return all relevant config parameters for logging/export."""
+        base = {
+            "SAMPLE_RATE": self.SAMPLE_RATE,
+            "CHANNELS": self.CHANNELS,
+            "CHUNK_S": self.CHUNK_S,
+            "VAD_MODE": self.VAD_MODE,
+            "MIN_SPEECH_S": self.MIN_SPEECH_S,
+            "MAX_SEGMENT_S": self.MAX_SEGMENT_S,
+            "PADDING_MS": self.PADDING_MS,
+            "FISH_PROMPT": self.FISH_PROMPT,
+            "MODEL_NAME": self.MODEL_NAME,
+            "DEVICE": self.DEVICE,
+            "COMPUTE_TYPE": self.COMPUTE_TYPE,
+            "BEAM_SIZE": self.BEAM_SIZE,
+            "BEST_OF": self.BEST_OF,
+            "TEMPERATURE": self.TEMPERATURE,
+            "PATIENCE": self.PATIENCE,
+            "LENGTH_PENALTY": self.LENGTH_PENALTY,
+            "REPETITION_PENALTY": self.REPETITION_PENALTY,
+            "WITHOUT_TIMESTAMPS": self.WITHOUT_TIMESTAMPS,
+            "CONDITION_ON_PREVIOUS_TEXT": self.CONDITION_ON_PREVIOUS_TEXT,
+            "VAD_FILTER": self.VAD_FILTER,
+            "VAD_PARAMETERS": self.VAD_PARAMETERS,
+            "WORD_TIMESTAMPS": self.WORD_TIMESTAMPS,
+            "NOISE_PROFILE": self._noise_profile_name,
+        }
+        return base
 
     # ---------- Public control ----------
     def stop(self) -> None:
@@ -181,11 +234,10 @@ class WhisperRecognizer(BaseSpeechRecognizer):
                 suppressor_config=suppressor_cfg,
             )
 
+        # Initialize session logger using singleton pattern (refactored)
         from logger.session_logger import SessionLogger
-        self._session_logger = SessionLogger()
+        self._session_logger = SessionLogger.get()
         self._session_logger.log_start(self.get_config())
-        import loguru
-        self._session_log_sink_id = loguru.logger.add(self._session_logger.log_path, format="[{time:YYYY-MM-DD HH:mm:ss}] {level}: {message}", level="INFO")
 
         if not self.isRunning():
             try:
@@ -193,48 +245,6 @@ class WhisperRecognizer(BaseSpeechRecognizer):
             except Exception as e:
                 logger.error(f"Failed to (re)start recognizer: {e}")
 
-    def is_stopped(self) -> bool:
-        """Return True if stop has been requested."""
-        return self._stop_flag
-
-    def pause(self) -> None:
-        """Pause transcription (after hearing 'WAIT')."""
-        self._paused = True
-        self.status_changed.emit("paused")
-
-    def resume(self) -> None:
-        """Resume transcription (after hearing 'START')."""
-        self._paused = False
-        self.status_changed.emit("listening")
-
-    def get_config(self) -> dict:
-        """Return all relevant config parameters for logging/export."""
-        base = {
-            "SAMPLE_RATE": self.SAMPLE_RATE,
-            "CHANNELS": self.CHANNELS,
-            "CHUNK_S": self.CHUNK_S,
-            "VAD_MODE": self.VAD_MODE,
-            "MIN_SPEECH_S": self.MIN_SPEECH_S,
-            "MAX_SEGMENT_S": self.MAX_SEGMENT_S,
-            "PADDING_MS": self.PADDING_MS,
-            "FISH_PROMPT": self.FISH_PROMPT,
-            "MODEL_NAME": self.MODEL_NAME,
-            "DEVICE": self.DEVICE,
-            "COMPUTE_TYPE": self.COMPUTE_TYPE,
-            "BEAM_SIZE": self.BEAM_SIZE,
-            "BEST_OF": self.BEST_OF,
-            "TEMPERATURE": self.TEMPERATURE,
-            "PATIENCE": self.PATIENCE,
-            "LENGTH_PENALTY": self.LENGTH_PENALTY,
-            "REPETITION_PENALTY": self.REPETITION_PENALTY,
-            "WITHOUT_TIMESTAMPS": self.WITHOUT_TIMESTAMPS,
-            "CONDITION_ON_PREVIOUS_TEXT": self.CONDITION_ON_PREVIOUS_TEXT,
-            "VAD_FILTER": self.VAD_FILTER,
-            "VAD_PARAMETERS": self.VAD_PARAMETERS,
-            "WORD_TIMESTAMPS": self.WORD_TIMESTAMPS,
-            "NOISE_PROFILE": self._noise_profile_name,
-        }
-        return base
 
     # ---------- Internal helpers ----------
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:

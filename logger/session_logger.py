@@ -9,20 +9,24 @@ from loguru import logger as loguru_logger
 
 
 class SessionLogger:
-    """Process-wide session logger.
+    """Session logger for tracking application sessions.
 
-    - Singleton: use SessionLogger.get() to retrieve the instance.
-    - Creates logs/sessions/<timestamped>.log at first access.
-    - Attaches a Loguru sink so all logger.info/warning/error are persisted.
-    - Registers best-effort shutdown hooks (aboutToQuit should also call log_end()).
+    Supports both singleton pattern (for backwards compatibility) and
+    dependency injection (for better testability).
     """
 
     _instance: Optional["SessionLogger"] = None
 
-    def __init__(self):
-        # Private: use get()
-        self.log_dir = "logs/sessions"
+    def __init__(self, log_dir: str = "logs/sessions", auto_start: bool = True):
+        """Initialize session logger.
+
+        Args:
+            log_dir: Directory for session logs
+            auto_start: Whether to log session start automatically
+        """
+        self.log_dir = log_dir
         os.makedirs(self.log_dir, exist_ok=True)
+
         # Filename uses minute_hour_day_month_year like existing convention
         timestamp = datetime.now().strftime("%M_%H_%d_%m_%Y")
         self.log_path = os.path.join(self.log_dir, f"whisper_session_{timestamp}.log")
@@ -43,17 +47,33 @@ class SessionLogger:
         # Track state to avoid duplicate end entries
         self._ended: bool = False
 
-        # Register best-effort shutdown handlers
-        atexit.register(self._on_atexit)
-        self._install_signal_handlers()
+        # Only register signal handlers and atexit for singleton instance
+        # to avoid duplicate handlers when using DI
+        if auto_start:
+            self.log("=== SESSION START ===")
 
-    # ---------- Singleton access ----------
+    # ---------- Singleton access (backwards compatible) ----------
     @classmethod
     def get(cls) -> "SessionLogger":
+        """Get singleton instance (backwards compatible).
+
+        For new code, prefer dependency injection instead.
+        """
         if cls._instance is None:
-            cls._instance = SessionLogger()
-            cls._instance.log("=== SESSION START ===")
+            cls._instance = SessionLogger(auto_start=True)
+            # Register handlers only for singleton
+            atexit.register(cls._instance._on_atexit)
+            cls._instance._install_signal_handlers()
         return cls._instance
+
+    @classmethod
+    def create(cls, log_dir: str = "logs/sessions") -> "SessionLogger":
+        """Create a new instance (for dependency injection).
+
+        This does NOT use the singleton pattern and allows multiple instances.
+        Useful for testing and when you want explicit control.
+        """
+        return SessionLogger(log_dir=log_dir, auto_start=True)
 
     # ---------- Wiring ----------
     def attach_loguru_sink(self) -> None:
@@ -102,32 +122,35 @@ class SessionLogger:
 
     # ---------- Public API ----------
     def log(self, message: str) -> None:
+        """Log a message to the session file."""
         self._py_logger.info(message)
 
-    def log_kv(self, prefix: str, data: dict) -> None:
-        for k, v in data.items():
-            self.log(f"{prefix}: {k} = {v}")
+    def log_start(self, config: Optional[dict] = None) -> None:
+        """Log session start (backward compatible method).
 
-    def log_start(self, config: dict) -> None:
-        # Keep compatibility; called optionally by app at startup
+        Args:
+            config: Optional configuration dict to log at session start
+        """
         self.log("=== SESSION START ===")
-        self.log_kv("CONFIG", config)
+        if config is not None:
+            self.log_kv("Configuration", config)
+
+    def log_kv(self, key: str, value) -> None:
+        """Log a key-value pair (e.g., configuration)."""
+        import json
+
+        try:
+            value_str = json.dumps(value, indent=2) if isinstance(value, (dict, list)) else str(value)
+            self.log(f"{key}: {value_str}")
+        except Exception:
+            self.log(f"{key}: {value}")
 
     def log_end(self) -> None:
-        if self._ended:
-            return
-        self._ended = True
-        self.log("=== SESSION END ===")
-        # Flush and detach sink
-        try:
-            for h in list(self._py_logger.handlers):
-                try:
-                    h.flush()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        self.detach_loguru_sink()
+        """Mark session end (idempotent)."""
+        if not self._ended:
+            self._ended = True
+            self.log("=== SESSION END ===")
+            self.detach_loguru_sink()
 
     # Convenience: per-segment timing
     def log_segment_timing(self, start_ts: float, end_ts: float, audio_samples: int, sample_rate: int, note: str = "") -> None:

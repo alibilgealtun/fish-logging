@@ -190,8 +190,10 @@ class InsanelyFastWhisperRecognizer(BaseSpeechRecognizer):
                 max_segment_s=self.MAX_SEGMENT_S,
                 suppressor_config=suppressor_cfg,
             )
+
+        # Initialize session logger using singleton pattern (refactored)
         from logger.session_logger import SessionLogger
-        self._session_logger = SessionLogger()
+        self._session_logger = SessionLogger.get()
         self._session_logger.log_start(self.get_config())
         import loguru
         self._session_log_sink_id = loguru.logger.add(

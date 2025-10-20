@@ -7,6 +7,8 @@ from typing import Optional, Any, Dict, List
 import json
 import re
 
+from core.exceptions import ConfigurationError
+
 # Optional logger: prefer loguru if available, else fallback to stdlib logging
 try:  # pragma: no cover - environment dependent
     from loguru import logger  # type: ignore
@@ -79,7 +81,7 @@ class GoogleSheetsBackup:
         try:
             self.config_path.write_text(json.dumps(cfg.to_dict(), indent=2))
         except Exception as e:
-            raise RuntimeError(f"Failed to save config: {e}")
+            raise ConfigurationError(f"Failed to save config: {e}")
 
     # Helpers
     @staticmethod
