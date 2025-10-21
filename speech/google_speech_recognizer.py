@@ -1,7 +1,12 @@
+"""Google Cloud Speech-to-Text Integration for Fish Logging.
+
+This module provides real-time and batch speech recognition using Google Cloud
+Speech-to-Text API. It's optimized for fish species and measurement recognition
+with phrase hints and optional numbers-only mode for measurement capture.
+"""
 import os
 from typing import Optional, Dict, Any, List
 from .base_recognizer import BaseSpeechRecognizer
-
 
 import numpy as np
 from loguru import logger
@@ -12,52 +17,107 @@ import json
 
 
 class GoogleSpeechRecognizer(BaseSpeechRecognizer):
-    # Reuse same signal names for consistency (redundant but explicit)
-    partial_text = pyqtSignal(str)
-    final_text = pyqtSignal(str, float)
-    error = pyqtSignal(str)
-    status_changed = pyqtSignal(str)
-    specie_detected = pyqtSignal(str)
+    """
+    Google Cloud Speech-to-Text recognizer for fish species and measurements.
 
-    # ===== CONFIG (aligned with Whisper recognizer defaults) =====
-    SAMPLE_RATE: int = 16000
-    CHANNELS: int = 1
-    CHUNK_S: float = 0.5
+    This implementation provides both real-time and batch recognition capabilities
+    using Google's cloud-based speech recognition service. It features phrase hints
+    for improved accuracy on fish-related vocabulary and supports a numbers-only
+    mode for efficient measurement capture.
 
-    # Noise controller settings
-    VAD_MODE: int = 2
-    MIN_SPEECH_S: float = 0.4
-    MAX_SEGMENT_S: float = 3.0
-    PADDING_MS: int = 600
+    Key Features:
+    - Real-time streaming recognition with noise control
+    - Batch file transcription capabilities
+    - Phrase hints for fish species and measurement terms
+    - Numbers-only mode for measurement-focused sessions
+    - Automatic credential detection and management
+    - Strong boosting for domain-specific vocabulary
+    - Integration with local noise controller for preprocessing
 
-    def __init__(self, language: str = "en-US", credentials_path: Optional[str] = None, numbers_only: bool = False, noise_profile: Optional[str] = None):
-        """Google Cloud Speech-to-Text recognizer with optional noise profile.
+    Authentication:
+    - Uses GOOGLE_APPLICATION_CREDENTIALS environment variable
+    - Auto-detects google.json in project root
+    - Supports various Google Cloud credential types
+    """
 
-        noise_profile: Optional name (clean|human|engine|mixed) controlling VAD/segment/suppression.
+    # PyQt signals for UI communication (explicit redefinition for consistency)
+    partial_text = pyqtSignal(str)  # Intermediate transcription results
+    final_text = pyqtSignal(str, float)  # Final text with confidence score
+    error = pyqtSignal(str)  # Error messages
+    status_changed = pyqtSignal(str)  # Status updates (listening, processing, etc.)
+    specie_detected = pyqtSignal(str)  # Fish species detection events
+
+    # ===== AUDIO CONFIGURATION =====
+    # Aligned with other recognizers for consistency
+    SAMPLE_RATE: int = 16000  # Google Cloud Speech standard sample rate
+    CHANNELS: int = 1  # Mono audio input
+    CHUNK_S: float = 0.5  # Audio chunk duration for processing
+
+    # ===== NOISE CONTROLLER SETTINGS =====
+    VAD_MODE: int = 2  # Voice Activity Detection aggressiveness
+    MIN_SPEECH_S: float = 0.4  # Minimum speech segment duration
+    MAX_SEGMENT_S: float = 3.0  # Maximum speech segment duration
+    PADDING_MS: int = 600  # Audio padding around speech segments
+
+    def __init__(
+        self,
+        language: str = "en-US",
+        credentials_path: Optional[str] = None,
+        numbers_only: bool = False,
+        noise_profile: Optional[str] = None
+    ):
+        """Initialize Google Cloud Speech-to-Text recognizer.
+
+        Sets up the recognizer with Google Cloud authentication, phrase hints,
+        and noise processing configuration. Handles credential auto-detection
+        and builds domain-specific vocabulary for improved accuracy.
+
+        Args:
+            language: Language code for recognition (e.g., "en-US", "es-ES")
+            credentials_path: Path to Google Cloud service account JSON file.
+                            If None, uses GOOGLE_APPLICATION_CREDENTIALS env var
+                            or auto-detects google.json in project root
+            numbers_only: If True, optimizes for number/measurement recognition only
+            noise_profile: Noise processing profile ("clean", "human", "engine", "mixed")
         """
         super().__init__(language=language)
+
+        # Configuration
         self.numbers_only = bool(numbers_only)
         self._noise_profile_name = (noise_profile or "mixed").lower()
+
+        # Handle Google Cloud authentication
         if credentials_path:
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
         elif not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+            # Auto-detect credentials in project root
             candidate = os.path.join(os.getcwd(), "google.json")
             if os.path.exists(candidate) and self._is_valid_gcp_credentials_file(candidate):
                 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = candidate
                 logger.info("Using credentials at project root: google.json")
-        self._client = None
-        self._stream = None  # type: ignore
+
+        # Initialize components
+        self._client = None  # Google Speech client (lazy loaded)
+        self._stream = None  # Audio input stream
         self._chunk_frames: int = int(self.SAMPLE_RATE * self.CHUNK_S)
         self._last_status_msg: Optional[str] = None
-        # Number prefix
+
+        # Load number prefix audio for improved number recognition
         self._number_sound = self._load_number_prefix()
-        # Apply noise profile overrides prior to creating controller
+
+        # Apply noise profile configuration
         from speech.noise_profiles import get_noise_profile, make_suppressor_config
         prof = get_noise_profile(self._noise_profile_name)
+
+        # Override default parameters with profile-specific settings
         for attr in ("VAD_MODE", "MIN_SPEECH_S", "MAX_SEGMENT_S", "PADDING_MS"):
             if attr in prof:
                 setattr(self, attr, prof[attr])
+
+        # Create suppressor configuration
         suppressor_cfg = make_suppressor_config(prof, self.SAMPLE_RATE)
+
+        # Initialize appropriate noise controller
         if self._noise_profile_name == "clean":
             from noise.simple_controller import SimpleNoiseController
             self._noise_controller = SimpleNoiseController(
@@ -74,28 +134,55 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                 max_segment_s=self.MAX_SEGMENT_S,
                 suppressor_config=suppressor_cfg,
             )
+
+        # Build phrase hints for improved recognition accuracy
         self._phrase_hints = self._build_phrase_hints(numbers_only=self.numbers_only)
 
     @staticmethod
     def _is_valid_gcp_credentials_file(path: str) -> bool:
+        """Validate that a file contains valid Google Cloud credentials.
+
+        Checks if the JSON file contains a valid credential type that can be
+        used with Google Cloud services.
+
+        Args:
+            path: Path to the potential credentials file
+
+        Returns:
+            bool: True if file contains valid GCP credentials, False otherwise
+        """
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+
+            # Check for valid Google Cloud credential types
             cred_type = data.get("type")
             return cred_type in {
-                "authorized_user",
-                "service_account",
-                "external_account",
-                "external_account_authorized_user",
-                "impersonated_service_account",
-                "gdch_service_account",
+                "authorized_user",               # OAuth2 user credentials
+                "service_account",               # Service account key
+                "external_account",              # Workload identity federation
+                "external_account_authorized_user",  # External account user
+                "impersonated_service_account",  # Impersonated service account
+                "gdch_service_account",         # Google Distributed Cloud
             }
         except Exception:
             return False
 
     def _get_client(self):
+        """Get or create Google Cloud Speech client with lazy initialization.
+
+        Creates the Speech client only when needed to avoid import overhead
+        and authentication checks during initialization.
+
+        Returns:
+            google.cloud.speech.SpeechClient: Configured Speech client
+
+        Raises:
+            Exception: If Google Cloud Speech is not available or authentication fails
+        """
         if self._client is not None:
             return self._client
+
         try:
             from google.cloud import speech as speech
             self._client = speech.SpeechClient()
@@ -110,50 +197,67 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
             raise
 
     def _build_phrase_hints(self, numbers_only: bool = False) -> List[str]:
-        """Collect hints. If numbers_only, restrict to numbers/units and a few control words."""
+        """Build phrase hints for improved recognition accuracy.
+
+        Creates a vocabulary list from configuration files to boost recognition
+        of domain-specific terms. In numbers-only mode, focuses on numeric
+        vocabulary and units. Otherwise includes fish species names as well.
+
+        Args:
+            numbers_only: If True, restrict hints to numbers, units, and control words
+
+        Returns:
+            List[str]: List of phrase hints to boost in recognition
+        """
         hints: List[str] = []
+
+        # Load number words from configuration
         try:
-            import json as _json
             with open(os.path.join("config", "numbers.json"), "r", encoding="utf-8") as f:
-                numbers_cfg = _json.load(f)
+                numbers_cfg = json.load(f)
             number_words = list(numbers_cfg.get("number_words", {}).keys())
         except Exception:
+            # Fallback number vocabulary if config loading fails
             number_words = [
-                "zero","one","two","three","four","five","six","seven","eight","nine",
-                "ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen",
-                "eighteen","nineteen","twenty","thirty","forty","fifty","sixty","seventy",
-                "eighty","ninety","hundred","point","dot","comma"
+                "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+                "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+                "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+                "eighty", "ninety", "hundred", "point", "dot", "comma"
             ]
+
+        # Load measurement units from configuration
         try:
-            import json as _json
             with open(os.path.join("config", "units.json"), "r", encoding="utf-8") as f:
-                units_cfg = _json.load(f)
+                units_cfg = json.load(f)
             unit_words = list(units_cfg.get("synonyms", {}).keys())
         except Exception:
-            unit_words = ["cm","centimeter","centimeters","mm","millimeter","millimeters"]
+            # Fallback unit vocabulary
+            unit_words = ["cm", "centimeter", "centimeters", "mm", "millimeter", "millimeters"]
 
         if numbers_only:
+            # Numbers-only mode: focus on numeric vocabulary
             hints.extend(number_words)
             hints.extend(unit_words)
-            hints.extend(["point", "dot", "comma"])  # decimals
-            hints.extend(["wait", "start"])  # app control words
+            hints.extend(["point", "dot", "comma"])  # Decimal indicators
+            hints.extend(["wait", "start"])  # Basic control commands
         else:
-            # Include species as well for general mode
+            # General mode: include fish species for comprehensive recognition
             try:
-                import json as _json
                 with open(os.path.join("config", "species.json"), "r", encoding="utf-8") as f:
-                    species_cfg = _json.load(f)
+                    species_cfg = json.load(f)
                 for item in species_cfg.get("items", []):
                     name = item.get("name")
                     if name:
                         hints.append(str(name))
             except Exception:
                 pass
+
+            # Add numeric and unit vocabulary
             hints.extend(number_words)
             hints.extend(unit_words)
-            hints.extend(["wait", "start", "cancel"])  # app commands
+            hints.extend(["wait", "start", "cancel"])  # Full command set
 
-        # Deduplicate and cap size
+        # Deduplicate and limit size to stay within Google Cloud limits
         seen = set()
         uniq: List[str] = []
         for h in hints:
@@ -165,54 +269,71 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                 continue
             seen.add(k)
             uniq.append(h2)
-            if len(uniq) >= 500:
+            if len(uniq) >= 500:  # Google Cloud Speech limit
                 break
+
         return uniq
 
-    # -------- File/batch synchronous API (kept) --------
+    # -------- Batch/File API Methods --------
+
     def transcribe_file(self, file_path: str) -> Dict[str, Any]:
-        """
-        Transcribe a single audio file using Google Cloud Speech-to-Text.
+        """Transcribe a single audio file using Google Cloud Speech-to-Text.
+
+        Processes an audio file through Google's batch recognition API with
+        domain-specific phrase hints and configuration optimizations.
+
+        Args:
+            file_path: Path to the audio file to transcribe
+
+        Returns:
+            Dict[str, Any]: Dictionary containing:
+                - text: Transcribed text (processed for numbers-only mode if enabled)
+                - raw_response: Original Google Cloud Speech response
         """
         from google.cloud import speech as speech
 
+        # Read audio file content
         with open(file_path, "rb") as audio_file:
             content = audio_file.read()
 
         audio = speech.RecognitionAudio(content=content)
 
-        # Build phrase hints with strong boosting for numbers-only mode
+        # Build speech contexts with phrase hints and strong boosting
         contexts = []
         if self._phrase_hints:
             try:
+                # Use strong boosting (20.0) for domain-specific terms
                 contexts = [speech.SpeechContext(phrases=self._phrase_hints, boost=20.0)]
             except Exception:
+                # Fallback without boost parameter if not supported
                 contexts = [speech.SpeechContext(phrases=self._phrase_hints)]
 
+        # Configure recognition parameters
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=self.SAMPLE_RATE,
             language_code=self.language,
-            enable_automatic_punctuation=not self.numbers_only,
-            model="latest_short",  # optimized for short commands
+            enable_automatic_punctuation=not self.numbers_only,  # Disable for numbers-only
+            model="latest_short",  # Optimized for short commands/phrases
             speech_contexts=contexts,
         )
 
+        # Perform recognition
         response = self._get_client().recognize(config=config, audio=audio)
 
+        # Extract transcription text
         transcripts = [result.alternatives[0].transcript for result in response.results]
         full_text = " ".join(transcripts).strip()
 
-        # If numbers_only, extract only digits/decimals
+        # Post-process for numbers-only mode
         if self.numbers_only:
             import re
+            # Extract only numeric patterns (digits with optional decimals)
             matches = re.findall(r"\d+(?:[.,]\d+)?", full_text)
             if matches:
-                # Join numbers if multiple (e.g., "twenty five" might get split)
+                # Join multiple numbers if found
                 full_text = " ".join(matches)
-            else:
-                # Optionally keep raw text if no number found
-                full_text = full_text
+            # If no numbers found, keep original text as fallback
 
         return {
             "text": full_text,
@@ -220,8 +341,18 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
         }
 
     def transcribe_batch(self, files: List[str]) -> List[Dict[str, Any]]:
-        """
-        Transcribe multiple files and return a list of dicts.
+        """Transcribe multiple audio files in batch.
+
+        Processes a list of audio files and returns results for each file.
+
+        Args:
+            files: List of file paths to transcribe
+
+        Returns:
+            List[Dict[str, Any]]: List of dictionaries, each containing:
+                - file: Original file path
+                - text: Transcribed text
+                - raw_response: Google Cloud Speech response
         """
         results = []
         for file_path in files:
@@ -231,47 +362,80 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
             })
         return results
 
-    # -------- Realtime support (mirrors Whisper flow) --------
+    # -------- Real-time Recognition Methods --------
+
     def set_last_species(self, species: str) -> None:
+        """Set the last detected fish species for context in number-only transcriptions.
+
+        Args:
+            species: Name of the fish species to use as context, or None to clear
+        """
         try:
             self._last_fish_specie = str(species) if species else None
         except Exception:
             self._last_fish_specie = None
 
     def _load_number_prefix(self) -> np.ndarray:
-        """Load a short number-beep/prompt to prepend before segments.
-        Returns PCM16 mono numpy array.
+        """Load number prefix audio for improved number recognition.
+
+        Loads a short audio clip to prepend to speech segments. This helps
+        Google's recognition better identify numeric content by providing
+        acoustic context that signals number recognition mode.
+
+        Returns:
+            np.ndarray: PCM16 mono audio samples for the number prefix
         """
         candidates = [
             os.path.join(os.getcwd(), "assets/audio/number.wav"),
         ]
+
         for path in candidates:
             try:
                 if os.path.exists(path):
                     data, sr = sf.read(path, dtype='int16')
+
+                    # Resample if necessary using simple nearest-neighbor
                     if sr != self.SAMPLE_RATE:
-                        # Resample quickly using numpy (nearest) – good enough for a tiny prefix
                         ratio = self.SAMPLE_RATE / sr
                         idx = (np.arange(int(len(data) * ratio)) / ratio).astype(int)
                         data = data[idx]
+
+                    # Convert to mono if stereo
                     if data.ndim > 1:
                         data = data[:, 0]
+
                     return data.astype(np.int16)
             except Exception as e:
                 logger.debug(f"Failed to load number prefix {path}: {e}")
+
         # Fallback to short silence
         return (np.zeros(int(self.SAMPLE_RATE * 0.05))).astype(np.int16)
 
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
+        """Sounddevice callback for real-time audio capture.
+
+        Args:
+            indata: Input audio data as float32 numpy array
+            frames: Number of audio frames in this chunk
+            time_info: Timing information from sounddevice (unused)
+            status: Status flags from sounddevice for error detection
+        """
         if status:
             logger.debug(f"Audio status: {status}")
+
         try:
+            # Convert float32 to PCM16 and feed to noise controller
             pcm16 = (indata[:, 0] * 32767).astype(np.int16)
             self._noise_controller.push_audio(pcm16)
         except Exception as e:
             logger.debug(f"Audio callback error: {e}")
 
     def _emit_status_once(self, message: str) -> None:
+        """Emit status_changed signal only when the message changes.
+
+        Args:
+            message: Status message to emit
+        """
         if message != self._last_status_msg:
             self._last_status_msg = message
             try:
@@ -280,14 +444,17 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                 logger.error(f"Failed to emit status_changed message: {message}")
 
     def begin(self) -> None:
+        """Reset internal state and start/restart the recognizer thread."""
         self._stop_flag = False
         self._last_status_msg = None
-        # Rebuild controller with (possibly re-applied) profile
+
+        # Rebuild noise controller with current profile settings
         from speech.noise_profiles import get_noise_profile, make_suppressor_config
         prof = get_noise_profile(self._noise_profile_name)
         for attr in ("VAD_MODE", "MIN_SPEECH_S", "MAX_SEGMENT_S", "PADDING_MS"):
             if attr in prof:
                 setattr(self, attr, prof[attr])
+
         suppressor_cfg = make_suppressor_config(prof, self.SAMPLE_RATE)
         if self._noise_profile_name == "clean":
             from noise.simple_controller import SimpleNoiseController
@@ -305,6 +472,7 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                 max_segment_s=self.MAX_SEGMENT_S,
                 suppressor_config=suppressor_cfg,
             )
+
         if not self.isRunning():
             try:
                 self.start()
@@ -312,6 +480,7 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                 logger.error(f"Failed to (re)start Google recognizer: {e}")
 
     def stop(self) -> None:
+        """Request the recognizer to stop and release all resources."""
         self._stop_flag = True
         try:
             if self._stream is not None:
@@ -321,11 +490,21 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                 self._stream = None
         except Exception as e:
             logger.debug(f"Error stopping input stream: {e}")
+
         self._noise_controller.stop()
 
     def run(self) -> None:
-        """Run the realtime loop: mic -> noise/vad -> Google STT -> parse -> UI."""
-        # Open microphone stream
+        """Main real-time recognition loop.
+
+        Implements the complete real-time recognition pipeline:
+        1. Initializes audio input stream
+        2. Configures Google Cloud Speech recognition
+        3. Processes audio segments from noise controller
+        4. Sends segments to Google Cloud Speech API
+        5. Applies fish-specific parsing and corrections
+        6. Emits structured results via PyQt signals
+        """
+        # Initialize audio input stream
         try:
             import sounddevice as sd  # type: ignore
             self._stream = sd.InputStream(
@@ -341,6 +520,7 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
             self.error.emit(msg)
             return
 
+        # Configure Google Cloud Speech recognition
         from google.cloud import speech as speech
         contexts = []
         if self._phrase_hints:
@@ -348,6 +528,7 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                 contexts = [speech.SpeechContext(phrases=self._phrase_hints, boost=20.0)]
             except Exception:
                 contexts = [speech.SpeechContext(phrases=self._phrase_hints)]
+
         base_config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=self.SAMPLE_RATE,
@@ -357,6 +538,7 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
             speech_contexts=contexts,
         )
 
+        # Main recognition loop
         with self._stream:
             logger.info(f"Recording with noise control (Google STT)... Press Stop to end. [profile={self._noise_profile_name}]")
             try:
@@ -371,18 +553,18 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
 
             while not self.is_stopped():
                 try:
+                    # Get next audio segment from noise controller
                     segment = next(segment_generator)
                     if segment is None or segment.size == 0:
                         continue
 
-                    # Enforce min duration (already applied but keep safe)
+                    # Check minimum duration requirement
                     if segment.size / self.SAMPLE_RATE < self.MIN_SPEECH_S:
                         continue
 
                     self._emit_status_once("processing")
 
-                    # Prepend number prefix and send raw PCM to Google
-                    #combined = np.concatenate((self._number_sound, segment)).astype(np.int16)
+                    # Send audio segment to Google Cloud Speech
                     audio = speech.RecognitionAudio(content=segment.tobytes())
 
                     try:
@@ -394,11 +576,12 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                         self._emit_status_once("listening")
                         continue
 
+                    # Extract recognition results
                     if not response.results:
                         self._emit_status_once("listening")
                         continue
 
-                    # Use the first alternative of the first result as the most likely
+                    # Get the most likely transcription
                     first_alt = response.results[0].alternatives[0]
                     text_out = first_alt.transcript.strip()
                     confidence = float(getattr(first_alt, "confidence", 0.85) or 0.85)
@@ -409,7 +592,7 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
 
                     logger.info(f"Raw transcription: {text_out}")
 
-                    # Handle control commands
+                    # Handle voice commands for pause/resume
                     text_lower = text_out.lower()
                     if "wait" in text_lower:
                         self.pause()
@@ -421,12 +604,13 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                         self._emit_status_once("listening")
                         continue
 
+                    # Skip processing if currently paused
                     if self._paused:
                         logger.debug("Paused: ignoring transcription")
                         self._emit_status_once("paused")
                         continue
 
-                    # Normalize and parse for species + length
+                    # Apply fish-specific parsing and formatting
                     try:
                         from parser import FishParser, TextNormalizer
                         fish_parser = FishParser()
@@ -435,20 +619,22 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                         result = fish_parser.parse_text(corrected_text)
 
                         if self.numbers_only:
+                            # Numbers-only mode: emit only numeric measurements
                             if result.length_cm is None:
-                                # Nothing numeric detected; skip
                                 self._emit_status_once("listening")
                                 continue
                             raw_val = float(result.length_cm)
                             num_str = (f"{raw_val:.1f}").rstrip("0").rstrip(".")
                             self.final_text.emit(num_str, confidence)
                         else:
+                            # General mode: handle species and measurements
                             if result.species is not None:
                                 self._last_fish_specie = result.species
                                 try:
                                     self.specie_detected.emit(result.species)
                                 except Exception:
                                     pass
+
                             if result.length_cm is not None:
                                 raw_val = float(result.length_cm)
                                 num_str = (f"{raw_val:.1f}").rstrip("0").rstrip(".")
@@ -457,9 +643,9 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                             else:
                                 self.final_text.emit(corrected_text, confidence)
                     except Exception:
-                        # Fallback
+                        # Fallback processing for parsing errors
                         if self.numbers_only:
-                            # Extract any digits as a last resort
+                            # Extract any digits as last resort
                             import re
                             m = re.search(r"\d+(?:[.,]\d+)?", text_out)
                             if m:
@@ -471,16 +657,24 @@ class GoogleSpeechRecognizer(BaseSpeechRecognizer):
                     self._emit_status_once("listening")
 
                 except StopIteration:
+                    # Generator exhausted (normal when stopping)
                     break
                 except Exception as e:
                     logger.error(f"Main loop error: {e}")
                     self.error.emit(f"Processing error: {e}")
                     continue
 
+        # Cleanup on exit
         self._emit_status_once("stopped")
         logger.info("Google speech recognizer stopped")
 
     def get_config(self) -> Dict[str, Any]:
+        """Return comprehensive configuration for logging and debugging.
+
+        Returns:
+            Dict[str, Any]: Complete configuration including audio settings,
+                           language, mode, and noise processing parameters
+        """
         return {
             "SAMPLE_RATE": self.SAMPLE_RATE,
             "CHANNELS": self.CHANNELS,

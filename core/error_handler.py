@@ -77,31 +77,34 @@ def log_execution_time(logger_instance=logger, level: str = "DEBUG"):
     return decorator
 
 
-def retry_on_failure(max_attempts: int = 3, delay: float = 1.0, logger_instance=logger):
-    """Decorator to retry a function on failure.
+def retry_on_failure(max_retries: int = 3, delay: float = 1.0, exceptions: tuple = (Exception,)):
+    """Decorator to retry function execution on failure.
 
     Args:
-        max_attempts: Maximum number of attempts
-        delay: Delay between attempts in seconds
-        logger_instance: Logger to use
+        max_retries: Maximum number of retry attempts
+        delay: Delay in seconds between retries
+        exceptions: Tuple of exception types to catch and retry
+
+    Returns:
+        Decorator function
     """
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             last_exception = None
-            for attempt in range(1, max_attempts + 1):
+            for attempt in range(1, max_retries + 1):
                 try:
                     return func(*args, **kwargs)
-                except Exception as e:
+                except exceptions as e:
                     last_exception = e
-                    if attempt < max_attempts:
-                        logger_instance.warning(
-                            f"{func.__name__} failed (attempt {attempt}/{max_attempts}): {e}"
+                    if attempt < max_retries:
+                        logger.warning(
+                            f"{func.__name__} failed (attempt {attempt}/{max_retries}): {e}"
                         )
                         time.sleep(delay)
                     else:
-                        logger_instance.error(
-                            f"{func.__name__} failed after {max_attempts} attempts: {e}"
+                        logger.error(
+                            f"{func.__name__} failed after {max_retries} attempts: {e}"
                         )
             raise last_exception
         return wrapper
@@ -152,4 +155,3 @@ class ErrorHandler:
         except Exception as e:
             self.handle(e, context=context or func.__name__)
             return default
-

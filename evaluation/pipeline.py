@@ -179,6 +179,14 @@ class DatasetSample:
 
 
 def discover_dataset(root: Path) -> List[DatasetSample]:
+    """Discover audio files in dataset directory structure.
+
+    Args:
+        root: Root directory of dataset
+
+    Returns:
+        List of discovered dataset samples
+    """
     samples: List[DatasetSample] = []
     for meta_path in root.rglob("metadata.json"):
         try:
@@ -352,6 +360,10 @@ def _load_json_dataset(json_path: Path, audio_root: Path | None) -> List[Dataset
 
 # ---------------------- Streaming Simulation ----------------------
 class StreamingSimulator:
+    """Simulates streaming audio processing for evaluation.
+
+    Splits audio into chunks and measures timing metrics like latency and RTF.
+    """
     def __init__(self, chunk_ms: int = 500, real_time: bool = False):
         self.chunk_ms = chunk_ms
         self.real_time = real_time
@@ -441,6 +453,14 @@ class ASREvaluator:
 
     # ---- Model management ----
     def _get_model(self, cfg: EvaluationConfig):
+        """Load or retrieve cached ASR model based on configuration.
+
+        Args:
+            cfg: Evaluation configuration with model parameters
+
+        Returns:
+            Loaded model instance
+        """
         key = f"{cfg.model.name}|{cfg.model.size}|{cfg.model.compute_type}|{cfg.model.device}"
         if key in _MODEL_CACHE:
             return _MODEL_CACHE[key]
@@ -597,6 +617,14 @@ class ASREvaluator:
         return self._decode(model, cfg, audio, sample_rate), None
 
     def _get_dataset_samples(self, cfg: EvaluationConfig) -> List[DatasetSample]:
+        """Load dataset samples based on configuration.
+
+        Args:
+            cfg: Evaluation configuration with dataset parameters
+
+        Returns:
+            List of dataset samples
+        """
         # Priority 1: JSON dataset if provided
         if cfg.dataset_json:
             json_path = Path(cfg.dataset_json)
@@ -1312,6 +1340,11 @@ class ASREvaluator:
 
     # ---- Output generation ----
     def _write_outputs(self, df: pd.DataFrame) -> None:
+        """Write evaluation results to parquet, Excel, and visualization files.
+
+        Args:
+            df: DataFrame containing evaluation results
+        """
         results_path = self.output_dir / "results.parquet"
         failures_path = self.output_dir / "failures.parquet"
         summary_path = self.output_dir / "summary.xlsx"

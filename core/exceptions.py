@@ -8,7 +8,7 @@ class FishLoggingException(Exception):
 
 
 class ParsingError(FishLoggingException):
-    """Raised when parsing fish data fails."""
+    """Raised when text parsing fails."""
     pass
 
 
@@ -18,11 +18,10 @@ class RecognizerError(FishLoggingException):
 
 
 class LoggingError(FishLoggingException):
-    """Raised when logging to storage fails."""
+    """Raised when logging operations fail."""
     pass
 
 
 class ConfigurationError(FishLoggingException):
-    """Raised when configuration is invalid."""
+    """Raised when configuration is invalid or missing."""
     pass
-

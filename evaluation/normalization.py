@@ -4,7 +4,7 @@ from __future__ import annotations
 This module adapts existing parsing/normalization logic (NumberParser, TextNormalizer)
 into reusable helpers for the evaluation pipeline.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple, Dict, Any
 import re
 
@@ -16,11 +16,20 @@ from parser.text_utils import tokenize_text
 
 @dataclass
 class NormalizationResult:
+    """Result of text normalization for evaluation.
+
+    Attributes:
+        raw_text: Original recognized text
+        corrected_text: Text after ASR corrections
+        normalized_text: Final normalized text
+        predicted_number: Extracted numeric value if any
+        debug: Additional debug information
+    """
     raw_text: str
     corrected_text: str
     normalized_text: str
     predicted_number: Optional[float]
-    debug: Dict[str, Any]
+    debug: Dict[str, Any] = field(default_factory=dict)
 
 
 class ASRNormalizer:
@@ -64,6 +73,17 @@ class ASRNormalizer:
 
     # ----- Error classification helpers -----
     def classify_error(self, prediction: Optional[float], reference: Optional[float], raw_text: str, ref_text: str = "") -> str:
+        """Classify the type of prediction error.
+
+        Args:
+            prediction: Predicted numeric value
+            reference: Reference numeric value
+            raw_text: Raw recognized text
+            ref_text: Reference text
+
+        Returns:
+            Error type: 'none', 'deletion', 'insertion', 'exact', 'ordering', 'formatting', or 'substitution'
+        """
         if prediction is None and reference is None:
             return "none"
         if prediction is None and reference is not None:
@@ -83,4 +103,3 @@ class ASRNormalizer:
             if any(t in self.config.number_words for t in tokens) and re.search(r"\d", raw_text) is None:
                 return "formatting"
         return "substitution"
-

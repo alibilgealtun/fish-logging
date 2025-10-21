@@ -65,6 +65,13 @@ def word_error_rate(hyp: str, ref: str) -> float:
     WER = (S + D + I) / N, computed via token-level edit distance.
     Tokenization uses simple whitespace split which is adequate for numeric tokens.
     Returns 0.0 if reference is empty (defined as perfect if hypothesis also empty, else 1.0).
+
+    Args:
+        hypothesis: Recognized text
+        reference: Ground truth text
+
+    Returns:
+        WER as a float (0.0 = perfect, 1.0 = completely wrong)
     """
     ref_tokens = ref.strip().split()
     hyp_tokens = hyp.strip().split()
@@ -95,6 +102,13 @@ def digit_error_rate(pred_number: Optional[float], ref_number: Optional[float]) 
     """Digit error rate between two numeric values based on digit sequences.
     Ignores decimal point and non-digits; compares canonicalized digits via Levenshtein.
     If reference is None returns 0 if pred is also None else 1.
+
+    Args:
+        predicted: Predicted numeric value
+        expected: Expected numeric value
+
+    Returns:
+        DER as a float, or None if either value is None
     """
     if ref_number is None:
         return 0.0 if pred_number is None else 1.0
@@ -116,6 +130,15 @@ def numeric_exact_match(pred_number: Optional[float], ref_number: Optional[float
 
 
 def mean_absolute_error_numbers(pairs: Iterable[tuple[Optional[float], Optional[float]]]) -> float:
+    """Calculate Mean Absolute Error (MAE) for numeric predictions.
+
+    Args:
+        predicted: Predicted numeric value
+        expected: Expected numeric value
+
+    Returns:
+        Absolute difference, or None if either value is None
+    """
     errors: List[float] = []
     for pred, ref in pairs:
         if pred is None or ref is None:

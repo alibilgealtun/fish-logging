@@ -1,4 +1,8 @@
-"""Services for application infrastructure management."""
+"""Services for application infrastructure management.
+
+This module implements the Service Layer pattern to separate infrastructure
+concerns (exception handling, signal handling, cleanup) from application logic.
+"""
 from __future__ import annotations
 
 import atexit
@@ -13,7 +17,14 @@ from core.error_handler import handle_exceptions
 
 
 class ExceptionHandlerService:
-    """Service for managing global exception handling."""
+    """Service for managing global exception handling.
+
+    Captures uncaught exceptions from both the main thread and worker threads,
+    logging them appropriately before allowing the default exception handling.
+
+    Attributes:
+        session_logger: Optional session logger for persistent error tracking
+    """
 
     def __init__(self, session_logger=None):
         self.session_logger = session_logger
@@ -21,7 +32,7 @@ class ExceptionHandlerService:
         self._original_thread_excepthook = threading.excepthook
 
     def install(self) -> None:
-        """Install global exception handlers."""
+        """Install global exception handlers for main and worker threads."""
         def excepthook(exc_type, exc_value, exc_traceback):
             try:
                 import traceback
@@ -30,6 +41,7 @@ class ExceptionHandlerService:
                 if self.session_logger:
                     self.session_logger.log(tb)
             finally:
+                # Always call original handler to ensure proper termination
                 try:
                     self._original_excepthook(exc_type, exc_value, exc_traceback)
                 except Exception:
@@ -48,14 +60,28 @@ class ExceptionHandlerService:
 
 
 class SignalHandlerService:
-    """Service for managing POSIX signal handlers."""
+    """Service for managing POSIX signal handlers.
+
+    Handles graceful shutdown on SIGINT, SIGTERM, SIGHUP, and SIGQUIT
+    by executing cleanup callbacks before terminating.
+    """
 
     def __init__(self, cleanup_callback: Optional[callable] = None, quit_callback: Optional[callable] = None):
+        """Initialize signal handler service.
+
+        Args:
+            cleanup_callback: Function to call for cleanup (e.g., close resources)
+            quit_callback: Function to call to exit application (e.g., QApplication.quit)
+        """
         self.cleanup_callback = cleanup_callback
         self.quit_callback = quit_callback
 
     def install(self) -> None:
-        """Install signal handlers for graceful shutdown."""
+        """Install signal handlers for graceful shutdown.
+
+        Registers handlers for common termination signals. Silently ignores
+        signals that cannot be caught in the current environment.
+        """
         def _handle(signum, frame):
             try:
                 logger.info(f"Received signal {signum}, initiating graceful shutdown...")
@@ -77,12 +103,16 @@ class SignalHandlerService:
                 try:
                     signal.signal(sig, _handle)
                 except Exception:
-                    # Some environments may not allow this
+                    # Some signals may not be catchable in certain environments
                     pass
 
 
 class CleanupService:
-    """Service for managing application cleanup."""
+    """Service for managing application cleanup.
+
+    Maintains a registry of cleanup handlers and ensures they are executed
+    exactly once in the correct order during application shutdown.
+    """
 
     def __init__(self):
         self._cleanup_handlers = []
@@ -99,7 +129,12 @@ class CleanupService:
 
     @handle_exceptions(message="Cleanup failed")
     def cleanup(self) -> None:
-        """Execute all registered cleanup handlers."""
+        """Execute all registered cleanup handlers.
+
+        Handlers are executed in registration order. Failures in individual
+        handlers are logged but don't prevent subsequent handlers from running.
+        Cleanup is idempotent - calling multiple times has no additional effect.
+        """
         if self._cleaned_up:
             return
 
@@ -116,12 +151,20 @@ class CleanupService:
         logger.info("Cleanup completed")
 
     def install_atexit(self) -> None:
-        """Register cleanup to run at exit."""
+        """Register cleanup to run at exit.
+
+        Uses Python's atexit module to ensure cleanup runs even if
+        the application terminates unexpectedly.
+        """
         atexit.register(self.cleanup)
 
 
 class RecognizerCleanupService:
-    """Service specifically for speech recognizer cleanup."""
+    """Service specifically for speech recognizer cleanup.
+
+    Handles the complex shutdown sequence required for speech recognizers,
+    including graceful interruption and forced termination if needed.
+    """
 
     def __init__(self, recognizer):
         self.recognizer = recognizer
@@ -133,12 +176,15 @@ class RecognizerCleanupService:
         Args:
             timeout_ms: Timeout for graceful shutdown in milliseconds
             force_timeout_ms: Timeout for forced termination in milliseconds
+
+        Note:
+            Attempts graceful interruption first, then forced stop if necessary.
         """
         if self.recognizer is None:
             return
 
         try:
-            # Request interruption
+            # Request interruption for thread-based recognizers
             if hasattr(self.recognizer, "requestInterruption"):
                 try:
                     self.recognizer.requestInterruption()
@@ -167,4 +213,3 @@ class RecognizerCleanupService:
                         pass
         except Exception as e:
             logger.debug(f"Recognizer wait() raised: {e}")
-

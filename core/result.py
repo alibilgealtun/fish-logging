@@ -63,4 +63,4 @@ class Failure(Generic[E]):
 
 # Type alias for Result
 Result = Union[Success[T], Failure[E]]
-
+"""Type alias for a result that can be either Success or Failure."""

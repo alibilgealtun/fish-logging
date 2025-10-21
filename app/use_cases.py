@@ -1,4 +1,9 @@
-"""Use cases for fish logging business logic."""
+"""Use cases for fish logging business logic.
+
+Implements the use case layer following Clean Architecture principles,
+encapsulating business rules and orchestrating data flow between
+the presentation layer and data layer.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,7 +19,16 @@ from parser.parser import FishParser, ParserResult
 
 @dataclass
 class FishEntry:
-    """Represents a fish logging entry."""
+    """Represents a fish logging entry.
+
+    Attributes:
+        species: Fish species name
+        length_cm: Length in centimeters
+        confidence: Recognition confidence score (0.0 to 1.0)
+        boat: Boat identifier
+        station_id: Station identifier
+        timestamp: Entry timestamp (defaults to current time)
+    """
     species: str
     length_cm: float
     confidence: float
@@ -28,7 +42,10 @@ class FishEntry:
 
 
 class ProcessFinalTextUseCase:
-    """Use case for processing final speech recognition text."""
+    """Use case for processing final speech recognition text.
+
+    Takes raw recognized text and parses it into structured fish data.
+    """
 
     def __init__(self, fish_parser: FishParser):
         self.fish_parser = fish_parser
@@ -41,7 +58,7 @@ class ProcessFinalTextUseCase:
             confidence: Recognition confidence score
 
         Returns:
-            Result containing ParserResult or error
+            Result containing ParserResult on success or ParsingError on failure
         """
         try:
             result = self.fish_parser.parse_text(text)
@@ -53,7 +70,10 @@ class ProcessFinalTextUseCase:
 
 
 class LogFishEntryUseCase:
-    """Use case for logging a fish entry."""
+    """Use case for logging a fish entry.
+
+    Persists fish catch data to Excel and optionally session logs.
+    """
 
     def __init__(self, excel_logger, session_logger=None):
         self.excel_logger = excel_logger
@@ -77,7 +97,7 @@ class LogFishEntryUseCase:
             station_id: Station identifier
 
         Returns:
-            Result containing FishEntry or error
+            Result containing FishEntry on success or LoggingError on failure
         """
         try:
             # Create entry
@@ -103,7 +123,11 @@ class LogFishEntryUseCase:
 
 
 class CancelLastEntryUseCase:
-    """Use case for canceling the last logged entry."""
+    """Use case for canceling the last logged entry.
+
+    Removes the most recent entry from the Excel log, useful for
+    correcting mistakes or handling mis-recognitions.
+    """
 
     def __init__(self, excel_logger):
         self.excel_logger = excel_logger
@@ -112,7 +136,8 @@ class CancelLastEntryUseCase:
         """Cancel the last entry.
 
         Returns:
-            Result with True if canceled, False if nothing to cancel
+            Result with True if entry was canceled, False if nothing to cancel,
+            or LoggingError on failure
         """
         try:
             ok = self.excel_logger.cancel_last()
@@ -124,4 +149,3 @@ class CancelLastEntryUseCase:
         except Exception as e:
             logger.error(f"Failed to cancel last entry: {e}")
             return Failure(LoggingError(f"Failed to cancel: {e}"))
-

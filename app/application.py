@@ -23,7 +23,17 @@ if TYPE_CHECKING:
 class Application:
     """Main application class that handles initialization and lifecycle.
 
-    Refactored to use service classes following Single Responsibility Principle.
+    Manages the application's dependencies, service initialization, and cleanup
+    using the Service Layer pattern for separation of concerns.
+
+    Attributes:
+        recognizer: Speech recognition engine
+        session: Session logger for tracking application events
+        excel_logger: Excel output for fish catch data
+        cleanup_service: Manages cleanup handlers
+        exception_handler: Global exception handling
+        signal_handler: POSIX signal handling for graceful shutdown
+        recognizer_cleanup: Speech recognizer cleanup logic
     """
 
     def __init__(
@@ -55,14 +65,18 @@ class Application:
         self.exception_handler.install()
         self.cleanup_service.install_atexit()
 
-        # Register cleanup handlers
+        # Register cleanup handlers in order of execution
         self.cleanup_service.register(self.recognizer_cleanup.cleanup, "recognizer")
         self.cleanup_service.register(
             lambda: SessionLogger.get().log_end(), "session_logger"
         )
 
     def log_session_info(self, config: dict) -> None:
-        """Log session configuration and recognizer info."""
+        """Log session configuration and recognizer info.
+
+        Args:
+            config: Configuration dictionary containing engine and settings
+        """
         try:
             self.session.log_kv(
                 "APP",
@@ -73,16 +87,24 @@ class Application:
                 },
             )
 
+            # Log recognizer-specific configuration if available
             if hasattr(self.recognizer, "get_config"):
                 self.session.log_kv("CONFIG", self.recognizer.get_config())
         except Exception:
             logger.warning("Failed to log session configuration")
 
     def create_qt_app(self, qt_args: list[str]) -> QApplication:
-        """Create and configure the Qt application."""
+        """Create and configure the Qt application.
+
+        Args:
+            qt_args: Command-line arguments to pass to QApplication
+
+        Returns:
+            Configured QApplication instance
+        """
         app = QApplication(qt_args)
 
-        # Update signal handler with quit callback
+        # Update signal handler with quit callback now that Qt is initialized
         self.signal_handler.quit_callback = app.quit
         self.signal_handler.install()
 
@@ -96,7 +118,14 @@ class Application:
         self.cleanup_service.cleanup()
 
     def create_main_window(self):
-        """Create the main application window."""
+        """Create the main application window.
+
+        Returns:
+            MainWindow instance
+
+        Note:
+            Import is deferred to avoid PyQt dependency in tests
+        """
         from gui.MainWindow import MainWindow  # local import to avoid PyQt in tests
 
         return MainWindow(self.recognizer, self.excel_logger)

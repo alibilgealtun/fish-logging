@@ -1,4 +1,9 @@
-"""Configuration service facade for simplified configuration access."""
+"""Configuration service facade for simplified configuration access.
+
+Implements the Facade pattern to provide a clean, simple interface
+to the complex configuration system. Reduces boilerplate and nesting
+in client code.
+"""
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -11,7 +16,15 @@ class ConfigurationService:
     """Facade for application configuration management.
 
     Provides simplified access to configuration values without
-    deep nesting and verbose attribute access.
+    deep nesting and verbose attribute access. All properties
+    delegate to the underlying AppConfig instance.
+
+    Example:
+        config_service = ConfigurationService(config)
+        engine = config_service.engine  # Instead of config.speech.engine
+
+    Attributes:
+        _config: Underlying AppConfig instance
     """
 
     def __init__(self, config: AppConfig):
@@ -111,11 +124,19 @@ class ConfigurationService:
     # Direct config access (for advanced use)
     @property
     def raw_config(self) -> AppConfig:
-        """Get raw configuration object."""
+        """Get raw configuration object.
+
+        Returns:
+            Underlying AppConfig instance for direct access
+        """
         return self._config
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert configuration to dictionary for serialization."""
+        """Convert configuration to dictionary for serialization.
+
+        Returns:
+            Dictionary representation of current configuration
+        """
         return {
             "speech": {
                 "engine": self.engine,
@@ -142,7 +163,11 @@ class ConfigurationService:
 
 
 class ConfigurationServiceFactory:
-    """Factory for creating ConfigurationService instances."""
+    """Factory for creating ConfigurationService instances.
+
+    Provides static factory methods for common creation patterns,
+    encapsulating the construction logic.
+    """
 
     @staticmethod
     def create_from_args(args: list[str]) -> tuple[ConfigurationService, list[str]]:
@@ -180,4 +205,3 @@ class ConfigurationServiceFactory:
         loader = ConfigLoader()
         config, _ = loader.load([])
         return ConfigurationService(config)
-
