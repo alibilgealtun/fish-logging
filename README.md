@@ -12,6 +12,7 @@ A professional desktop application for real-time speech-to-structured fish catch
 - [Overview](#-overview)
 - [Key Features](#-key-features)
 - [Architecture](#-architecture)
+- [Technology Stack & Dependencies](#-technology-stack--dependencies)
 - [Quick Start](#-quick-start)
 - [Installation](#-installation)
 - [Configuration](#-configuration)
@@ -116,6 +117,394 @@ The application follows **Clean Architecture** principles with SOLID design patt
 - **Observer Pattern**: Event-driven speech recognition callbacks
 - **Singleton Pattern**: Session logger and application state management
 - **Use Case Pattern**: Business logic isolation from UI
+
+---
+
+## 📚 Technology Stack & Dependencies
+
+### Core Framework & GUI
+
+#### **PyQt6** (`PyQt6>=6.5.0`)
+- **Purpose**: Cross-platform GUI framework for the desktop application
+- **Usage**: Main window, widgets, tables, buttons, dialogs, and all UI components
+- **Why chosen**: Mature, feature-rich, native look-and-feel, excellent documentation
+- **Key features**: 
+  - Signal/slot mechanism for event handling
+  - Rich widget library (tables, buttons, text editors)
+  - Model-View architecture for data display
+  - Theme support and customization
+
+#### **PyQt6-WebEngine** (`PyQt6-WebEngine>=6.5.0`)
+- **Purpose**: Web content rendering within PyQt6 applications
+- **Usage**: Displaying HTML-based reports and visualizations in the Reports tab
+- **Why chosen**: Seamless integration with PyQt6, modern web rendering
+- **Key features**: Chromium-based rendering, JavaScript support, HTML5 compatibility
+
+### Speech Recognition Engines
+
+#### **faster-whisper** (`faster-whisper>=1.0.0`)
+- **Purpose**: Optimized implementation of OpenAI's Whisper model for speech recognition
+- **Usage**: Default ASR engine, converts audio to text with high accuracy
+- **Why chosen**: Best balance of speed, accuracy, and resource usage
+- **Key features**: 
+  - CTranslate2 backend for 4x speed improvement
+  - INT8 quantization for lower memory usage
+  - GPU acceleration support (CUDA)
+  - Multiple model sizes (tiny, base, small, medium, large)
+
+#### **whisperx** (`whisperx>=3.1.0`)
+- **Purpose**: Extended Whisper with word-level timestamps and alignment
+- **Usage**: Alternative ASR engine for highest accuracy scenarios
+- **Why chosen**: Best-in-class accuracy, word-level timing, speaker diarization
+- **Key features**: 
+  - Forced phoneme alignment for precise timestamps
+  - Speaker identification (who said what)
+  - Voice activity detection integration
+  - Multi-speaker transcription
+
+#### **insanely-fast-whisper** (`insanely-fast-whisper>=0.0.15`)
+- **Purpose**: Extremely fast Whisper inference using Flash Attention and batching
+- **Usage**: Optional ASR engine when speed is critical
+- **Why chosen**: Up to 10x faster than standard Whisper
+- **Key features**: Flash Attention 2, batch processing, optimized CUDA kernels
+
+#### **Google Cloud Speech** (`google-cloud-speech>=2.26`)
+- **Purpose**: Google's cloud-based speech-to-text API (includes Chirp)
+- **Usage**: Cloud ASR option for highest accuracy, supports 125+ languages
+- **Why chosen**: Industry-leading accuracy, automatic punctuation, broad language support
+- **Key features**: 
+  - Streaming and batch recognition
+  - Automatic punctuation and capitalization
+  - Custom vocabulary and phrase hints
+  - Profanity filtering
+
+#### **Google Generative AI** (`google-generativeai>=0.3.0`)
+- **Purpose**: Google's Gemini 2.5 Pro multimodal AI model
+- **Usage**: Advanced ASR option with context understanding
+- **Why chosen**: Multimodal capabilities, contextual understanding, natural conversation
+- **Key features**: 
+  - Long context window (up to 1M tokens)
+  - Multimodal input (audio, text, images)
+  - Reasoning and context awareness
+  - Function calling support
+
+#### **Transformers** (`transformers>=4.44.0`)
+- **Purpose**: Hugging Face library for transformer models (Wav2Vec2)
+- **Usage**: Wav2Vec2 ASR engine, fine-tuning capabilities
+- **Why chosen**: Research-friendly, customizable, large model hub
+- **Key features**: 
+  - Pre-trained model access
+  - Fine-tuning and transfer learning
+  - Model quantization and optimization
+  - Extensive model zoo
+
+#### **PyTorch** (`torch>=2.2.0`)
+- **Purpose**: Deep learning framework for neural network inference
+- **Usage**: Backend for Whisper, Wav2Vec2, and other neural models
+- **Why chosen**: Industry standard, GPU acceleration, extensive ecosystem
+- **Key features**: 
+  - CUDA and ROCm GPU support
+  - Automatic differentiation
+  - TorchScript for optimization
+  - ONNX export support
+
+#### **AssemblyAI** (`websocket-client>=1.7.0`)
+- **Purpose**: Real-time streaming speech recognition API
+- **Usage**: Cloud ASR option with advanced features
+- **Why chosen**: Excellent streaming support, speaker labels, content moderation
+- **Key features**: 
+  - Real-time WebSocket streaming
+  - Speaker diarization
+  - Content safety detection
+  - PII redaction
+
+### Audio Processing
+
+#### **sounddevice** (`sounddevice>=0.4.6`)
+- **Purpose**: Cross-platform audio I/O library for recording microphone input
+- **Usage**: Captures real-time audio from microphone in background thread
+- **Why chosen**: Low-latency, cross-platform, numpy integration
+- **Key features**: 
+  - Non-blocking audio streams
+  - Multiple device support
+  - Callback-based API
+  - Direct numpy array output
+
+#### **soundfile** (`soundfile>=0.12.1`)
+- **Purpose**: Audio file reading/writing library
+- **Usage**: Saves audio segments, loads test audio files
+- **Why chosen**: Simple API, supports WAV, FLAC, OGG formats
+- **Key features**: 
+  - Memory-efficient streaming
+  - Metadata preservation
+  - Multiple audio formats
+  - Numpy integration
+
+#### **webrtcvad** (`webrtcvad>=2.0.10`)
+- **Purpose**: Voice Activity Detection (VAD) using WebRTC's algorithm
+- **Usage**: Detects speech vs silence to segment audio intelligently
+- **Why chosen**: Production-proven, fast, low-latency, no ML model needed
+- **Key features**: 
+  - Real-time VAD (10/20/30ms frames)
+  - Adjustable aggressiveness (0-3)
+  - Minimal CPU usage
+  - Battle-tested in Chrome/WebRTC
+
+#### **scipy** (`scipy>=1.10.0`)
+- **Purpose**: Scientific computing library for signal processing
+- **Usage**: High-pass filtering, spectral analysis, noise suppression
+- **Why chosen**: Industry standard, optimized algorithms, extensive functionality
+- **Key features**: 
+  - Butterworth/Chebyshev filters
+  - FFT and spectral analysis
+  - Signal filtering and resampling
+  - Window functions
+
+#### **numpy** (`numpy>=1.24.0`)
+- **Purpose**: Fundamental array computing library
+- **Usage**: Audio data manipulation, numerical operations, array processing
+- **Why chosen**: Foundation of scientific Python, extremely fast C backend
+- **Key features**: 
+  - N-dimensional arrays
+  - Vectorized operations
+  - Broadcasting
+  - Memory-efficient views
+
+### Natural Language Processing
+
+#### **rapidfuzz** (`rapidfuzz>=3.0.0`)
+- **Purpose**: Fast fuzzy string matching library
+- **Usage**: Species name matching with typos and variants
+- **Why chosen**: 5-10x faster than alternatives, pure C++ backend
+- **Key features**: 
+  - Levenshtein distance
+  - Token-based matching
+  - Process extraction (best matches)
+  - Configurable scoring
+
+### Data Management
+
+#### **pandas** (`pandas>=2.0.0`)
+- **Purpose**: Data manipulation and analysis library
+- **Usage**: Evaluation results storage, data aggregation, Excel export
+- **Why chosen**: Industry standard, rich functionality, excellent I/O
+- **Key features**: 
+  - DataFrame operations
+  - Time series support
+  - Excel/CSV/Parquet I/O
+  - Groupby and aggregation
+
+#### **openpyxl** (`openpyxl>=3.1.0`)
+- **Purpose**: Excel file reading/writing library
+- **Usage**: Creates and updates Excel logs for fish catch data
+- **Why chosen**: Pure Python, no Excel installation needed, feature-rich
+- **Key features**: 
+  - Read/write .xlsx files
+  - Cell formatting and styling
+  - Formula support
+  - Chart creation
+
+#### **pyarrow** (`pyarrow>=14.0.0`)
+- **Purpose**: Apache Arrow Python bindings for columnar data
+- **Usage**: Parquet format for evaluation results (fast, compressed)
+- **Why chosen**: 10-100x faster than CSV, efficient compression
+- **Key features**: 
+  - Parquet I/O
+  - Zero-copy reads
+  - Columnar storage
+  - Schema validation
+
+### Google Services Integration
+
+#### **gspread** (`gspread>=6.0.0`)
+- **Purpose**: Google Sheets API client library
+- **Usage**: Optional backup of fish logs to Google Sheets
+- **Why chosen**: Simple API, handles authentication, comprehensive features
+- **Key features**: 
+  - Read/write cells
+  - Batch operations
+  - Worksheet management
+  - Service account auth
+
+#### **google-auth** (`google-auth>=2.20.0`)
+- **Purpose**: Google authentication library
+- **Usage**: Authenticates with Google Cloud services (Sheets, Speech API)
+- **Why chosen**: Official Google library, handles OAuth2 and service accounts
+- **Key features**: 
+  - Service account credentials
+  - OAuth2 flows
+  - Token refresh
+  - Credential storage
+
+### Logging & Debugging
+
+#### **loguru** (`loguru>=0.7.0`)
+- **Purpose**: Modern logging library with better defaults than stdlib
+- **Usage**: Application-wide logging, error tracking, debug output
+- **Why chosen**: Zero-config, colored output, exception catching, rotation
+- **Key features**: 
+  - No configuration needed
+  - Automatic rotation
+  - Colored console output
+  - Exception context capture
+  - Lazy evaluation
+  - Thread-safe
+
+#### **python-dotenv** (`python-dotenv>=1.0.0`)
+- **Purpose**: Load environment variables from .env files
+- **Usage**: API keys, credentials, configuration without hardcoding
+- **Why chosen**: Standard tool for environment management, simple API
+- **Key features**: 
+  - .env file parsing
+  - Override system env vars
+  - Multiline support
+  - Comments support
+
+### Visualization & Reporting
+
+#### **matplotlib** (`matplotlib>=3.7.0`)
+- **Purpose**: Plotting library for creating static visualizations
+- **Usage**: Length distribution histograms, evaluation metric plots
+- **Why chosen**: Industry standard, extensive plot types, publication-quality
+- **Key features**: 
+  - 2D/3D plotting
+  - Statistical plots
+  - Export to PNG/PDF/SVG
+  - Customizable styles
+
+#### **seaborn** (`seaborn>=0.12.0`)
+- **Purpose**: Statistical visualization library built on matplotlib
+- **Usage**: Box plots, violin plots, distribution analysis
+- **Why chosen**: Beautiful defaults, statistical focus, DataFrame integration
+- **Key features**: 
+  - Statistical plots
+  - Categorical plots
+  - Distribution visualization
+  - Correlation heatmaps
+
+#### **plotly** (`plotly>=5.15.0`)
+- **Purpose**: Interactive plotting library
+- **Usage**: Interactive reports, web-based dashboards
+- **Why chosen**: Interactive, web-ready, professional dashboards
+- **Key features**: 
+  - Interactive plots
+  - Hover tooltips
+  - Zoom and pan
+  - Export to HTML
+
+#### **kaleido** (`kaleido>=0.2.1`)
+- **Purpose**: Static image export for Plotly figures
+- **Usage**: Export Plotly charts as PNG/PDF for reports
+- **Why chosen**: Official Plotly solution, cross-platform
+- **Key features**: 
+  - PNG/PDF/SVG export
+  - No browser needed
+  - Fast rendering
+  - Format options
+
+### Testing & Evaluation
+
+#### **pytest** (`pytest>=8.0.0`)
+- **Purpose**: Modern testing framework
+- **Usage**: Unit tests, integration tests, fixtures
+- **Why chosen**: Simple, powerful, extensive plugin ecosystem
+- **Key features**: 
+  - Test discovery
+  - Fixtures for setup/teardown
+  - Parametrized tests
+  - Plugin system
+  - Detailed failure reports
+
+#### **devtools** (`devtools>=0.12.2`)
+- **Purpose**: Development tools for debugging
+- **Usage**: Pretty printing, debug output during development
+- **Why chosen**: Beautiful output, helpful during development
+- **Key features**: 
+  - Pretty print debug()
+  - Object inspection
+  - Timer utilities
+  - Memory profiling
+
+#### **psutil** (`psutil>=5.9.0`)
+- **Purpose**: System and process utilities
+- **Usage**: Monitor CPU, RAM, GPU usage during evaluation
+- **Why chosen**: Cross-platform, comprehensive metrics
+- **Key features**: 
+  - Process monitoring
+  - System statistics
+  - Memory usage tracking
+  - Disk/network stats
+
+#### **pynvml** (`pynvml>=11.5.0`)
+- **Purpose**: NVIDIA Management Library Python bindings
+- **Usage**: Monitor GPU memory and utilization during evaluation
+- **Why chosen**: Official NVIDIA library, detailed metrics
+- **Key features**: 
+  - GPU memory usage
+  - GPU utilization
+  - Temperature monitoring
+  - Multi-GPU support
+
+#### **Levenshtein** (`Levenshtein>=0.25.0`)
+- **Purpose**: Fast edit distance calculations
+- **Usage**: WER, CER, DER metric computations in evaluation
+- **Why chosen**: C implementation, fastest available
+- **Key features**: 
+  - Edit distance
+  - Ratio calculation
+  - Hamming distance
+  - Jaro-Winkler
+
+#### **tqdm** (`tqdm>=4.66.0`)
+- **Purpose**: Progress bars for loops
+- **Usage**: Shows progress during evaluation pipeline
+- **Why chosen**: Beautiful, informative, minimal overhead
+- **Key features**: 
+  - Progress bars
+  - ETA estimation
+  - Rate display
+  - Nested bars
+
+### Package Summary by Function
+
+| Function | Packages Used |
+|----------|---------------|
+| **GUI** | PyQt6, PyQt6-WebEngine |
+| **Speech Recognition** | faster-whisper, whisperx, insanely-fast-whisper, google-cloud-speech, google-generativeai, transformers, torch, websocket-client |
+| **Audio Processing** | sounddevice, soundfile, webrtcvad, scipy, numpy |
+| **Text Processing** | rapidfuzz, Levenshtein |
+| **Data Storage** | pandas, openpyxl, pyarrow, gspread, google-auth |
+| **Logging** | loguru, python-dotenv |
+| **Visualization** | matplotlib, seaborn, plotly, kaleido |
+| **Testing** | pytest, devtools, psutil, pynvml, tqdm |
+
+### Installation by Use Case
+
+If you want to minimize dependencies, install only what you need:
+
+```bash
+# Minimal install (local offline ASR only)
+pip install PyQt6 PyQt6-WebEngine faster-whisper sounddevice soundfile webrtcvad \
+    scipy numpy rapidfuzz pandas openpyxl loguru python-dotenv
+
+# Add WhisperX (better accuracy)
+pip install whisperx
+
+# Add cloud ASR services
+pip install google-cloud-speech google-generativeai websocket-client
+
+# Add Wav2Vec2 (research/customization)
+pip install transformers torch
+
+# Add evaluation pipeline
+pip install matplotlib seaborn plotly kaleido pytest psutil pynvml Levenshtein tqdm pyarrow
+
+# Add Google Sheets backup
+pip install gspread google-auth
+
+# Full install (everything)
+pip install -r requirements.txt
+```
 
 ---
 
@@ -1156,7 +1545,7 @@ fish-logging/
 | `main.py` | Application entry point, initializes and starts app |
 | `app/application.py` | Main application class managing lifecycle |
 | `app/use_cases.py` | Business logic separated from UI |
-| `gui/MainWindow.py` | Main GUI window coordinating UI components |
+| `gui/MainWindow.py` | Main GUI window coordinating UI |
 | `parser/parser.py` | Core parsing logic for fish entries |
 | `speech/factory.py` | Factory for creating ASR recognizers |
 | `config/service.py` | Facade for simplified configuration access |
@@ -1229,4 +1618,4 @@ fish-logging/
 
 
 
-Made by Ali Altun in his internship, 08/2025 - 10/2025. 
+Made by Ali Altun in his internship, 08/2025 - 10/2025.
