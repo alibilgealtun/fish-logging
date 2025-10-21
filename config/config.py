@@ -1,4 +1,14 @@
-"""Enhanced configuration system with comprehensive loading and validation."""
+"""Enhanced configuration system with comprehensive loading and validation.
+
+Implements a hierarchical configuration system with the following precedence:
+1. Default values (lowest priority)
+2. JSON configuration files
+3. Environment variables
+4. Command-line arguments (highest priority)
+
+Configuration is deep-merged across all sources, allowing partial overrides
+at any level of the configuration hierarchy.
+"""
 from __future__ import annotations
 
 import json
@@ -9,10 +19,20 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import argparse
 
+from core.exceptions import ConfigurationError
+
 
 @dataclass(frozen=True)
 class SpeechConfig:
-    """Speech recognition configuration."""
+    """Speech recognition configuration.
+
+    Attributes:
+        engine: Speech recognition engine name
+        numbers_only: Enable numbers-only parsing mode
+        model_path: Optional custom model path
+        language: Recognition language code
+        noise_profile: Acoustic environment profile for optimized parameters
+    """
     engine: str
     numbers_only: bool
     model_path: Optional[str] = None
@@ -21,14 +41,20 @@ class SpeechConfig:
 
     def __post_init__(self):
         if self.engine not in ("whisper", "whisperx", "vosk", "google", "assemblyai", "gemini", "chirp", "wav2vec2"):
-            raise ValueError(f"Invalid engine: {self.engine}")
+            raise ConfigurationError(f"Invalid engine: {self.engine}")
         if self.noise_profile not in {"clean", "human", "engine", "mixed"}:
-            raise ValueError(f"Invalid noise_profile: {self.noise_profile}")
+            raise ConfigurationError(f"Invalid noise_profile: {self.noise_profile}")
 
 
 @dataclass(frozen=True)
 class DatabaseConfig:
-    """Database and logging configuration."""
+    """Database and logging configuration.
+
+    Attributes:
+        excel_output_path: Path to Excel output file for fish data
+        session_log_dir: Directory for session log files
+        backup_enabled: Enable automatic backup functionality
+    """
     excel_output_path: str = "logs/hauls/logs.xlsx"
     session_log_dir: str = "logs/sessions"
     backup_enabled: bool = True
@@ -36,22 +62,49 @@ class DatabaseConfig:
 
 @dataclass(frozen=True)
 class AudioConfig:
-    """Audio storage configuration."""
+    """Audio storage configuration.
+
+    Attributes:
+        segments_dir: Directory for saving audio segments
+        save_segments: Enable saving of audio segments for debugging/analysis
+    """
     segments_dir: str = "audio/segments"
-    save_segments: bool = False  # Enable/disable saving audio segments
+    save_segments: bool = False
 
 
 @dataclass(frozen=True)
 class UIConfig:
-    """User interface configuration."""
+    """User interface configuration.
+
+    Attributes:
+        theme: UI theme name
+        window_size: Default window dimensions (width, height)
+        auto_save_interval: Auto-save interval in seconds
+    """
     theme: str = "default"
     window_size: Tuple[int, int] = (1200, 800)
-    auto_save_interval: int = 30  # seconds
+    auto_save_interval: int = 30
 
 
 @dataclass(frozen=True)
 class AppConfig:
-    """Complete application configuration."""
+    """Complete application configuration.
+
+    Aggregates all configuration sections and loaded JSON data.
+
+    Attributes:
+        speech: Speech recognition settings
+        database: Database and logging settings
+        audio: Audio storage settings
+        ui: User interface settings
+        asr_corrections: ASR text corrections mapping
+        species_data: Species configuration data
+        numbers_data: Number parsing configuration
+        units_data: Unit conversion configuration
+        google_sheets_config: Google Sheets integration config
+        debug: Debug mode flag
+        log_level: Logging verbosity level
+    """
     speech: SpeechConfig
     database: DatabaseConfig
     audio: AudioConfig
@@ -69,13 +122,24 @@ class AppConfig:
 
 
 class ConfigLoader:
-    """Centralized configuration loader with validation and hierarchy."""
+    """Centralized configuration loader with validation and hierarchy.
+
+    Implements the configuration loading strategy with proper precedence
+    and deep merging of nested configuration dictionaries.
+    """
 
     def __init__(self, config_dir: Path = Path("config")):
         self.config_dir = config_dir
 
     def load(self, argv: List[str]) -> Tuple[AppConfig, List[str]]:
-        """Load configuration with proper hierarchy: defaults → files → env → CLI."""
+        """Load configuration with proper hierarchy: defaults → files → env → CLI.
+
+        Args:
+            argv: Command-line arguments to parse
+
+        Returns:
+            Tuple of (AppConfig instance, unknown CLI arguments)
+        """
         # 1. Start with defaults
         config_dict = self._get_defaults()
 
@@ -123,7 +187,11 @@ class ConfigLoader:
         }
 
     def _load_json_configs(self) -> Dict[str, Any]:
-        """Load all JSON configuration files."""
+        """Load all JSON configuration files.
+
+        Returns:
+            Dictionary containing loaded JSON data, with empty dicts for missing files
+        """
         json_configs = {}
 
         json_files = {
@@ -149,7 +217,19 @@ class ConfigLoader:
         return json_configs
 
     def _load_env_overrides(self) -> Dict[str, Any]:
-        """Load configuration overrides from environment variables."""
+        """Load configuration overrides from environment variables.
+
+        Supported environment variables:
+        - SPEECH_ENGINE: Speech recognition engine
+        - SPEECH_NUMBERS_ONLY: Enable numbers-only mode
+        - SPEECH_LANGUAGE: Recognition language
+        - SPEECH_NOISE_PROFILE: Noise environment profile
+        - DEBUG: Enable debug mode
+        - LOG_LEVEL: Set logging level
+
+        Returns:
+            Dictionary with environment-based overrides
+        """
         overrides: Dict[str, Any] = {}
 
         # Speech configuration
@@ -187,7 +267,14 @@ class ConfigLoader:
         return overrides
 
     def _parse_cli_args(self, argv: List[str]) -> Tuple[Dict[str, Any], List[str]]:
-        """Parse CLI arguments."""
+        """Parse CLI arguments.
+
+        Args:
+            argv: Command-line arguments
+
+        Returns:
+            Tuple of (overrides dictionary, unknown arguments)
+        """
         parser = argparse.ArgumentParser(description="Fish logging application")
 
         parser.add_argument(
@@ -223,6 +310,7 @@ class ConfigLoader:
 
         known, unknown = parser.parse_known_args(argv)
 
+        # Build overrides from parsed arguments
         overrides: Dict[str, Any] = {}
         if known.engine:
             speech_overrides = overrides.setdefault("speech", {})
@@ -248,7 +336,17 @@ class ConfigLoader:
         return overrides, unknown
 
     def _build_config(self, config_dict: Dict[str, Any]) -> AppConfig:
-        """Build and validate the final configuration object."""
+        """Build and validate the final configuration object.
+
+        Args:
+            config_dict: Merged configuration dictionary
+
+        Returns:
+            Validated AppConfig instance
+
+        Raises:
+            ConfigurationError: If configuration is invalid
+        """
         # Extract nested configs
         speech_config = SpeechConfig(**config_dict.get("speech", {}))
         database_config = DatabaseConfig(**config_dict.get("database", {}))
@@ -272,7 +370,15 @@ class ConfigLoader:
 
     @staticmethod
     def _env_bool(name: str, default: bool = False) -> bool:
-        """Parse boolean from environment variable."""
+        """Parse boolean from environment variable.
+
+        Args:
+            name: Environment variable name
+            default: Default value if not set
+
+        Returns:
+            Boolean value (True for "1", "true", "yes", "y", "on")
+        """
         val = os.getenv(name)
         if val is None:
             return default
@@ -285,6 +391,10 @@ class ConfigLoader:
         - Only keys present in updates are applied.
         - For dict values, merge recursively.
         - For non-dict values, assign directly.
+
+        Args:
+            target: Dictionary to update (modified in place)
+            updates: Dictionary with new values
         """
         for key, new_val in updates.items():
             if isinstance(new_val, dict) and isinstance(target.get(key), dict):
@@ -294,7 +404,16 @@ class ConfigLoader:
 
 
 def parse_app_args(argv: List[str]) -> Tuple[AppConfig, List[str]]:
-    """Parse application configuration with enhanced loading."""
+    """Parse application configuration with enhanced loading.
+
+    Convenience function for creating a ConfigLoader and loading configuration.
+
+    Args:
+        argv: Command-line arguments
+
+    Returns:
+        Tuple of (AppConfig instance, unknown arguments)
+    """
     loader = ConfigLoader()
     return loader.load(argv)
 

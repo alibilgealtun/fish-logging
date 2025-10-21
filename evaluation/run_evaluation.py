@@ -250,6 +250,7 @@ def _maybe_plot(df, output_dir: Path):  # pragma: no cover - plotting
 
 
 def main(argv: List[str] | None = None):
+    """Main entry point for evaluation pipeline execution."""
     ns = parse_args(argv)
     # 1) Load central model_specs.json (base layer)
     central = _load_central_specs()

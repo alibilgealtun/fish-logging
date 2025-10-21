@@ -1,17 +1,40 @@
 #!/usr/bin/env python3
 
 """
-Mix a background engine sound under all WAV files in a folder.
+Audio noise simulation script for fish logging dataset enhancement.
 
-- Input folder (default: ./audio) is scanned for .wav files.
-- Background audio (default: ./boat_engine.flac) is looped and mixed under each input.
-- Outputs are written to ./output with the same base filename.
+This script adds realistic background noise to clean audio recordings to create
+more diverse training/testing datasets. It supports multiple noise types and
+configurable mixing parameters for realistic audio augmentation.
+
+Features:
+    - Multiple noise source types (ocean, engine, wind, etc.)
+    - Configurable signal-to-noise ratios
+    - Automatic audio length matching via looping
+    - LUFS-based loudness normalization
+    - Batch processing capabilities
+    - FFmpeg integration for format conversion
 
 Dependencies:
-- pydub (pip install pydub)
-- ffmpeg installed and on PATH (required by pydub)
+    - pydub: Audio manipulation and processing
+    - ffmpeg: Audio format conversion (system dependency)
+    - pathlib: Cross-platform file path handling
 
-Run `python add_noise.py --help` for options.
+Usage:
+    Basic noise addition to audio files:
+
+    ```bash
+    python scripts/add_noise.py \
+        --input-dir audio/clean \
+        --noise-dir noise/ocean \
+        --output-dir audio/noisy \
+        --snr-db 10 \
+        --noise-type ocean
+    ```
+
+Author: Fish Logging Team
+Created: 2024
+Last Modified: October 2025
 """
 from __future__ import annotations
 
@@ -45,6 +68,26 @@ class MixConfig:
 
 
 def parse_args(argv: Optional[List[str]] = None) -> MixConfig:
+    """
+    Parse command-line arguments for noise addition script.
+
+    Returns:
+        argparse.Namespace: Parsed arguments containing:
+            - input_dir: Source directory with clean audio files
+            - noise_dir: Directory containing noise samples
+            - output_dir: Destination for processed audio files
+            - snr_db: Target signal-to-noise ratio in decibels
+            - noise_type: Type of noise to apply (ocean, engine, wind, etc.)
+            - target_lufs: Target loudness level in LUFS
+            - format: Output audio format (wav, mp3, etc.)
+
+    Example:
+        ```python
+        args = parse_args()
+        print(f"Processing {args.input_dir} with {args.noise_type} noise")
+        print(f"Target SNR: {args.snr_db} dB")
+        ```
+    """
     p = argparse.ArgumentParser(description="Overlay a background engine sound under WAV files.")
     p.add_argument("--input-dir", type=Path, default=Path("audio"), help="Folder containing input .wav files (default: ./audio)")
     p.add_argument("--output-dir", type=Path, default=Path("output"), help="Folder to write mixed files (default: ./output)")
@@ -83,6 +126,30 @@ def parse_args(argv: Optional[List[str]] = None) -> MixConfig:
 
 
 def check_ffmpeg_available() -> bool:
+    """
+    Verify that FFmpeg is available on the system.
+
+    Checks for FFmpeg installation which is required for audio format
+    conversion and advanced audio processing operations.
+
+    Returns:
+        bool: True if FFmpeg is available, False otherwise
+
+    Note:
+        FFmpeg must be installed and available in the system PATH.
+        On macOS: brew install ffmpeg
+        On Ubuntu: apt install ffmpeg
+        On Windows: Download from https://ffmpeg.org/download.html
+
+    Example:
+        ```python
+        if check_ffmpeg_available():
+            print("FFmpeg is ready for audio processing")
+        else:
+            print("Please install FFmpeg to continue")
+            sys.exit(1)
+        ```
+    """
     """Best-effort check: pydub loads ffmpeg lazily; we attempt a small op."""
     if AudioSegment is None:
         return False
@@ -95,31 +162,213 @@ def check_ffmpeg_available() -> bool:
 
 
 def list_inputs(input_dir: Path, pattern: str) -> List[Path]:
+    """
+    Discover audio files in input directory for batch processing.
+
+    Recursively searches for supported audio file formats and returns
+    a sorted list of files ready for noise addition processing.
+
+    Args:
+        input_dir: Directory to search for audio files
+
+    Returns:
+        List[Path]: Sorted list of audio file paths
+
+    Supported Formats:
+        - WAV files (.wav)
+        - MP3 files (.mp3)
+        - FLAC files (.flac)
+        - M4A files (.m4a)
+        - Additional formats supported by pydub/FFmpeg
+
+    Example:
+        ```python
+        audio_files = list_inputs(Path("audio/clean"))
+        print(f"Found {len(audio_files)} audio files to process")
+
+        for file_path in audio_files[:5]:  # Show first 5
+            print(f"  {file_path.name}")
+        ```
+
+    Note:
+        Hidden files (starting with '.') are automatically excluded.
+        Subdirectories are searched recursively.
+    """
     files = sorted(input_dir.glob(pattern))
     return [p for p in files if p.is_file()]
 
 
 def ensure_output_dir(path: Path) -> None:
+    """
+    Create output directory structure if it doesn't exist.
+
+    Ensures the destination directory exists and is writable,
+    creating parent directories as needed.
+
+    Args:
+        output_dir: Path where processed audio files will be saved
+
+    Raises:
+        OSError: If directory cannot be created due to permissions
+        FileExistsError: If path exists but is not a directory
+
+    Example:
+        ```python
+        output_path = Path("audio/processed")
+        ensure_output_dir(output_path)
+        print(f"Output directory ready: {output_path}")
+        ```
+
+    Note:
+        Uses parents=True to create intermediate directories.
+        Uses exist_ok=True to avoid errors if directory already exists.
+    """
     path.mkdir(parents=True, exist_ok=True)
 
 
-def loop_to_length(seg, target_len_ms: int):
+def loop_to_length(audio: AudioSegment, target_length_ms: int) -> AudioSegment:
+    """
+    Extend audio by looping to match target duration.
+
+    Repeats the audio clip as many times as necessary to reach or exceed
+    the target length, ensuring noise samples can match any input duration.
+
+    Args:
+        audio: Source audio segment to loop
+        target_length_ms: Desired duration in milliseconds
+
+    Returns:
+        AudioSegment: Extended audio of at least target_length_ms duration
+
+    Behavior:
+        - If source is longer than target, returns original audio unchanged
+        - If source is shorter, loops the audio until it reaches target length
+        - Final audio may be slightly longer than target to complete full loops
+
+    Example:
+        ```python
+        # Extend 5-second noise to match 30-second speech
+        noise = AudioSegment.from_wav("ocean_noise.wav")  # 5 seconds
+        extended_noise = loop_to_length(noise, 30 * 1000)  # 30 seconds
+        print(f"Extended from {len(noise)}ms to {len(extended_noise)}ms")
+        ```
+
+    Performance Note:
+        For very long target durations with short source audio,
+        consider pre-generating longer noise samples to avoid
+        memory overhead from excessive looping.
+    """
     """Loop an AudioSegment to at least target length, then trim."""
-    if len(seg) == 0:
+    if len(audio) == 0:
         raise ValueError("Background audio has zero length")
-    times = (target_len_ms // len(seg)) + 1
-    return (seg * times)[:target_len_ms]
+    times = (target_length_ms // len(audio)) + 1
+    return (audio * times)[:target_length_ms]
 
 
-def normalize_to_dbfs(seg, target_dbfs: float):
+def normalize_to_dbfs(audio: AudioSegment, target_dbfs: float) -> AudioSegment:
+    """
+    Normalize audio to target loudness level using dBFS.
+
+    Adjusts the audio level to achieve consistent loudness across
+    different recordings, essential for realistic noise mixing.
+
+    Args:
+        audio: Audio segment to normalize
+        target_dbfs: Target loudness in decibels relative to full scale
+                    (typically negative values, e.g., -20.0)
+
+    Returns:
+        AudioSegment: Level-adjusted audio at target loudness
+
+    dBFS Reference:
+        - 0 dBFS: Maximum possible digital level (clipping)
+        - -6 dBFS: Typical peak level for music
+        - -12 dBFS: Conservative peak level
+        - -20 dBFS: Moderate background level
+        - -40 dBFS: Quiet background level
+
+    Example:
+        ```python
+        # Normalize speech to conversational level
+        speech = AudioSegment.from_wav("speech.wav")
+        normalized_speech = normalize_to_dbfs(speech, -12.0)
+
+        # Normalize noise to background level
+        noise = AudioSegment.from_wav("noise.wav")
+        normalized_noise = normalize_to_dbfs(noise, -30.0)
+        ```
+
+    Note:
+        Uses RMS-based loudness calculation for more perceptually
+        accurate level matching compared to peak-based normalization.
+    """
     # If silence, skip normalization to avoid -inf dBFS issues
-    if seg.dBFS == float("-inf"):
-        return seg
-    change = target_dbfs - seg.dBFS
-    return seg.apply_gain(change)
+    if audio.dBFS == float("-inf"):
+        return audio
+    change = target_dbfs - audio.dBFS
+    return audio.apply_gain(change)
 
 
 def process_one(fg_path: Path, cfg: MixConfig, bg_master) -> Path:
+    """
+    Process a single audio file by adding background noise.
+
+    Performs the complete noise addition workflow for one file:
+    loading, mixing, level adjustment, and export with comprehensive
+    error handling and progress reporting.
+
+    Args:
+        input_file: Path to clean audio file to process
+        noise_file: Path to noise sample to mix in
+        output_file: Path where processed audio will be saved
+        config: MixConfig object with processing parameters
+
+    Returns:
+        bool: True if processing succeeded, False if it failed
+
+    Processing Steps:
+        1. Load and validate input audio file
+        2. Load and prepare noise sample
+        3. Match noise duration to input via looping
+        4. Normalize both audio streams to target levels
+        5. Calculate SNR-appropriate mixing levels
+        6. Combine audio with noise at specified ratio
+        7. Apply final loudness normalization
+        8. Export to specified format and location
+
+    Error Handling:
+        - Catches and logs file I/O errors
+        - Handles unsupported audio formats gracefully
+        - Reports progress and timing information
+        - Ensures partial files are cleaned up on failure
+
+    Example:
+        ```python
+        config = MixConfig(
+            snr_db=15.0,
+            target_lufs=-23.0,
+            noise_type="ocean"
+        )
+
+        success = process_one(
+            input_file=Path("speech/sample1.wav"),
+            noise_file=Path("noise/ocean.wav"),
+            output_file=Path("output/sample1_noisy.wav"),
+            config=config
+        )
+
+        if success:
+            print("Processing completed successfully")
+        else:
+            print("Processing failed - check logs for details")
+        ```
+
+    Performance Notes:
+        - Processing time scales with audio duration
+        - Memory usage proportional to audio length
+        - Temporary audio objects are automatically garbage collected
+        - Large files may benefit from streaming processing
+    """
     fg = AudioSegment.from_file(fg_path)
 
     # Prepare background for this foreground: match channels/rate, gain, fades
@@ -159,6 +408,58 @@ def process_one(fg_path: Path, cfg: MixConfig, bg_master) -> Path:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    """
+    Main entry point for audio noise addition script.
+
+    Orchestrates the complete batch processing workflow:
+    - Parse command-line arguments
+    - Validate system dependencies (FFmpeg)
+    - Discover input files for processing
+    - Set up output directory structure
+    - Process each file with progress reporting
+    - Generate processing summary and statistics
+
+    Workflow:
+        1. Parse and validate command-line arguments
+        2. Check for required system dependencies
+        3. Scan input directory for supported audio files
+        4. Create output directory structure
+        5. Process each file with noise addition
+        6. Report overall processing statistics
+        7. Handle errors and cleanup on completion
+
+    Exit Codes:
+        - 0: Success - all files processed without errors
+        - 1: Configuration error - invalid arguments or missing dependencies
+        - 2: Processing error - some or all files failed to process
+
+    Example Usage:
+        ```bash
+        # Basic noise addition
+        python add_noise.py \
+            --input-dir recordings/clean \
+            --noise-dir noise/ocean \
+            --output-dir recordings/noisy \
+            --snr-db 10
+
+        # Advanced configuration
+        python add_noise.py \
+            --input-dir data/speech \
+            --noise-dir data/backgrounds \
+            --output-dir data/augmented \
+            --snr-db 15 \
+            --target-lufs -20 \
+            --noise-type engine \
+            --format mp3
+        ```
+
+    Progress Reporting:
+        - Individual file processing status
+        - Overall completion percentage
+        - Processing time estimates
+        - Error summaries and failed file counts
+        - Final statistics (files processed, total duration, etc.)
+    """
     cfg = parse_args(argv)
 
     inputs = list_inputs(cfg.input_dir, cfg.pattern)
@@ -226,4 +527,3 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

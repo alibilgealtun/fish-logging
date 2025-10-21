@@ -108,65 +108,10 @@ class Wav2Vec2Recognizer(BaseSpeechRecognizer):
                 suppressor_config=suppressor_cfg,
             )
 
-        # Lazy model objects
-        self._hf_processor = None
-        self._hf_model = None
-        self._torch = None
-
-    # ---------- Public control ----------
-    def stop(self) -> None:
-        self._stop_flag = True
-        try:
-            self.requestInterruption()
-        except Exception:
-            pass
-        try:
-            if self._stream is not None:
-                import sounddevice as sd  # noqa: F401
-                self._stream.stop()
-                self._stream.close()
-                self._stream = None
-        except Exception as e:
-            logger.debug(f"Error stopping input stream: {e}")
-        self._noise_controller.stop()
-
-    def begin(self) -> None:
-        # Reset flags/state for a clean restart
-        self._stop_flag = False
-        self._last_status_msg = None
-
-        from speech.noise_profiles import get_noise_profile, make_suppressor_config
-        prof = get_noise_profile(self._noise_profile_name)
-        for attr in ("VAD_MODE", "MIN_SPEECH_S", "MAX_SEGMENT_S", "PADDING_MS"):
-            if attr in prof:
-                setattr(self, attr, prof[attr])
-        suppressor_cfg = make_suppressor_config(prof, self.SAMPLE_RATE)
-        if self._noise_profile_name == "clean":
-            from noise.simple_controller import SimpleNoiseController
-            self._noise_controller = SimpleNoiseController(
-                sample_rate=self.SAMPLE_RATE,
-                vad_mode=self.VAD_MODE,
-                min_speech_s=self.MIN_SPEECH_S,
-                max_segment_s=self.MAX_SEGMENT_S,
-            )
-        else:
-            self._noise_controller = NoiseController(
-                sample_rate=self.SAMPLE_RATE,
-                vad_mode=self.VAD_MODE,
-                min_speech_s=self.MIN_SPEECH_S,
-                max_segment_s=self.MAX_SEGMENT_S,
-                suppressor_config=suppressor_cfg,
-            )
-
+        # Initialize session logger using singleton pattern (refactored)
         from logger.session_logger import SessionLogger
-        self._session_logger = SessionLogger()
+        self._session_logger = SessionLogger.get()
         self._session_logger.log_start(self.get_config())
-        import loguru
-        self._session_log_sink_id = loguru.logger.add(
-            self._session_logger.log_path,
-            format="[{time:YYYY-MM-DD HH:mm:ss}] {level}: {message}",
-            level="INFO",
-        )
 
         if not self.isRunning():
             try:

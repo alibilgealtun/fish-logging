@@ -32,6 +32,7 @@ DEFAULT_BASE_CONFIG = {
 
 @dataclass
 class ModelConfig:
+    """Configuration for ASR model selection and parameters."""
     name: str = "faster-whisper"
     size: str = "base.en"
     compute_type: str = "int8"
@@ -51,6 +52,10 @@ class InferenceConfig:
 
 @dataclass
 class EvaluationConfig:
+    """Complete configuration for an evaluation run.
+
+    Combines model, inference, and dataset settings with metadata.
+    """
     test_run_id: str
     model: ModelConfig
     inference_config: InferenceConfig
@@ -109,7 +114,7 @@ def make_config(
         model=mc,
         inference_config=ic,
         environment=environment,
-        vad_mode=vad_mode,
+        vad_mode=vad,
         dataset_json=dataset_json,
         concat_number=concat_number,
         number_audio_path=number_audio_path,
@@ -140,6 +145,27 @@ def expand_parameter_grid(
     """Expand a full Cartesian product of the provided parameter lists.
 
     Large grids can explode quickly; caller is responsible for filtering.
+
+    Args:
+        models: Iterable of model names
+        sizes: Iterable of model sizes
+        compute_types: Iterable of compute types
+        devices: Iterable of devices
+        beams: Iterable of beam sizes
+        chunk_sizes_ms: Iterable of chunk sizes in milliseconds
+        environments: Iterable of environment labels
+        vad_modes: Iterable of VAD mode integers
+        streaming_modes: Iterable of streaming mode booleans
+        languages: Iterable of language codes
+        dataset_json: Optional JSON file for dataset configuration
+        concat_number: Boolean flag for concatenating number audio paths
+        number_audio_path: Optional base path for number audio files
+        audio_root: Optional root directory for audio files
+        production_replay: Boolean flag for enabling production replay
+        **extra_fixed: Additional fixed parameters for configuration
+
+    Returns:
+        List of expanded EvaluationConfig objects
     """
     configs: List[EvaluationConfig] = []
     for (m, s, ct, dev, beam, chunk, env, vad, sm, lang) in product(
